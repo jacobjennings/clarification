@@ -9,10 +9,10 @@ logging.basicConfig(filename="prepare_data.log", encoding="utf-8", level=logging
 training_speech_dataset = load_dataset(
     path="MLCommons/peoples_speech",
     name="clean",
-    split="train[:0.5%]",
+    split="train[:1%]",
     data_files="train/clean.json",
-    # data_dir=os.path.dirname("/Volumes/bigsmb/peoples_speech_clean_small"),
-    cache_dir=os.path.dirname("/Volumes/bigsmb/huggingface-cache/")
+    # data_dir=os.path.dirname("/media/bigsmb/peoples_speech_clean_small"),
+    cache_dir=os.path.dirname("/media/bigsmb/huggingface-cache/")
 )
 
 logging.debug("training_speech_dataset: {}".format(training_speech_dataset))
