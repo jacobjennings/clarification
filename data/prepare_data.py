@@ -10,16 +10,21 @@ parser = argparse.ArgumentParser(
                     description='Prepares datasets for clarification training.')
 
 # Shorthand forms omitted intentionally for clarity.
-parser.add_argument('base_dataset_cache_directory', required=True)
-parser.add_argument('modified_dataset_cache_directory', required=True)
+parser.add_argument('--base_dataset_cache_directory', required=True)
+parser.add_argument('--modified_dataset_cache_directory', required=True)
 args = parser.parse_args()
 
 # Set up log file which should appear in the working directory.
 logging.basicConfig(filename="prepare_data.log", encoding="utf-8", level=logging.DEBUG)
 
+# Additional argument validations
 if not args.base_dataset_cache_directory.endswith("/"):
     logging.error("base_dataset_cache_directory must end with a / character.")
 
+if not args.modified_dataset_cache_directory.endswith("/"):
+    logging.error("modified_dataset_cache_directory must end with a / character.")
+
+# Load base dataset from cache, or download it (downloads everything)
 training_speech_dataset = load_dataset(
     path="MLCommons/peoples_speech",
     name="clean",
@@ -29,6 +34,7 @@ training_speech_dataset = load_dataset(
     cache_dir=os.path.dirname(args.base_dataset_cache_directory)
 )
 
+# Save the split we created
 training_speech_dataset.save_to_disk(os.path.dirname(args.modified_dataset_cache_directory))
 
 logging.debug("training_speech_dataset: {}".format(training_speech_dataset))
