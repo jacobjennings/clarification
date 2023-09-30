@@ -1,6 +1,7 @@
 import argparse
 import os
 import logging
+import secrets
 
 from datasets import load_dataset, Audio
 
@@ -28,16 +29,16 @@ if not args.modified_dataset_cache_directory.endswith("/"):
 training_speech_dataset = load_dataset(
     path="MLCommons/peoples_speech",
     name="clean",
-    split="train[:1%]",
+    split="train[:10]",
     data_files="train/clean.json",
     # data_dir=os.path.dirname("/media/bigsmb/peoples_speech_clean_small"),
     cache_dir=os.path.dirname(args.base_dataset_cache_directory)
 )
 
-# Save the split we created
-training_speech_dataset.save_to_disk(os.path.dirname(args.modified_dataset_cache_directory))
+# training_speech_dataset.save_to_disk(os.path.dirname(args.modified_dataset_cache_directory))
 
 logging.debug("training_speech_dataset: {}".format(training_speech_dataset))
+logging.debug("first element: {}".format(training_speech_dataset[0]["audio"]))
 
-# dataset = dataset.cast_column("audio", Audio(sampling_rate=16000))
-# dataset[0]["audio"]
+dataset = training_speech_dataset.cast_column("audio", Audio(sampling_rate=16000))
+logging.debug("first element: {}".format(dataset[0]["audio"]))
