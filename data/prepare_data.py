@@ -16,7 +16,7 @@ parser.add_argument('--modified_dataset_cache_directory', required=True)
 args = parser.parse_args()
 
 # Set up log file which should appear in the working directory.
-logging.basicConfig(filename="prepare_data.log", encoding="utf-8", level=logging.DEBUG)
+logging.basicConfig(filename="prepare_data.log", encoding="utf-8", level=logging.INFO)
 
 # Additional argument validations
 if not args.base_dataset_cache_directory.endswith("/"):
@@ -37,8 +37,8 @@ training_speech_dataset = load_dataset(
 
 # training_speech_dataset.save_to_disk(os.path.dirname(args.modified_dataset_cache_directory))
 
-logging.debug("training_speech_dataset: {}".format(training_speech_dataset))
-logging.debug("first element: {}".format(training_speech_dataset[0]["audio"]))
+logging.info("training_speech_dataset: {}".format(training_speech_dataset))
+logging.info("first element: {}".format(training_speech_dataset[0]["audio"]))
 
 dataset = training_speech_dataset.cast_column("audio", Audio(sampling_rate=16000))
-logging.debug("first element: {}".format(dataset[0]["audio"]))
+logging.info("first element: {}".format(dataset[0]["audio"]))
