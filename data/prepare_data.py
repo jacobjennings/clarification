@@ -2,8 +2,18 @@ import argparse
 import os
 import logging
 import secrets
+import numpy
+import torch
 
 from datasets import load_dataset, Audio
+
+
+def add_noise(batch):
+    audio = batch['audio']
+    noise = numpy.asarray(0.01 * numpy.random.randn(len(audio['array'])))
+    audio['array'] = audio['array'] + noise
+    return batch
+
 
 # Parse and define arguments
 parser = argparse.ArgumentParser(
@@ -27,18 +37,21 @@ if not args.modified_dataset_cache_directory.endswith("/"):
 
 # Load base dataset from cache, or download it (downloads everything)
 training_speech_dataset = load_dataset(
-    path="MLCommons/peoples_speech",
-    name="clean",
-    split="train[:10]",
-    data_files="train/clean.json",
-    # data_dir=os.path.dirname("/media/bigsmb/peoples_speech_clean_small"),
-    cache_dir=os.path.dirname(args.base_dataset_cache_directory)
+    path="fsicoli/common_voice_17_0",
+    name="en",
+    split="train[:1000]",
+    cache_dir=os.path.dirname(args.base_dataset_cache_directory),
+    trust_remote_code=True
 )
 
-# training_speech_dataset.save_to_disk(os.path.dirname(args.modified_dataset_cache_directory))
+training_speech_audio_dataset = training_speech_dataset.cast_column('audio', Audio(sampling_rate=16000))
+training_speech_audio_dataset.map(add_noise)
+
+training_speech_dataset.save_to_disk(os.path.dirname(args.modified_dataset_cache_directory))
 
 logging.info("training_speech_dataset: {}".format(training_speech_dataset))
 logging.info("first element: {}".format(training_speech_dataset[0]["audio"]))
 
 dataset = training_speech_dataset.cast_column("audio", Audio(sampling_rate=16000))
 logging.info("first element: {}".format(dataset[0]["audio"]))
+

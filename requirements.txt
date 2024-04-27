@@ -1,5 +1,8 @@
-tensorflow==2.13
-datasets
+torch
+torchaudio
 librosa
 soundfile
-
+numpy
+torchvision
+matplotlib
+ipywidgets
