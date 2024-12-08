@@ -43,6 +43,9 @@ import numpy as np
 from torch.utils.tensorboard import SummaryWriter
 
 base_dataset_directory = '/home/jacob/cv-corpus-17.0-2024-03-15/en'
+
+# Uncomment these. Safety measure to avoid accidental use.
+
 # resampled_clear_dataset_directory = '/home/jacob/noisy-commonvoice-48k/en/clear'
 # noisy_dataset_directory = '/home/jacob/noisy-commonvoice-48k/en/noisy'
 
