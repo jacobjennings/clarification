@@ -10,8 +10,9 @@ import torchaudio.transforms as T
 
 from torch.utils.tensorboard import SummaryWriter
 
-from ..clarifications.modules.conv_block import ConvBlock1D
-
+from ..modules.conv_block import ConvBlock1D
+from ..modules.out_layer import OutLayer
+from ..modules.glue import Glue1D
 
 class Down(nn.Module):
     def __init__(self, in_channels, out_channels, device, dtype):
@@ -57,19 +58,19 @@ class Up(nn.Module):
             device=device, dtype=dtype)
 
     def forward(self, x, down_output, lstm_output):
-        lstm_time_normalized = self.lstmMatcher(lstm_output)
+        lstm_time_normalized = self.lstm_matcher(lstm_output)
         x = self.transpose(x)
         diff = down_output.size()[1] - x.size()[1]  # Calculate difference correctly
         x = nnF.pad(x, (diff // 2, diff - diff // 2))
         x = torch.cat([down_output, x], dim=1)
         x = x + lstm_time_normalized
-        x = self.convBlock(x)
+        x = self.conv_block(x)
 
         return x
 
 
 class DenseLSTM(nn.Module):
-    def __init__(self, layer_sizes, input_size, hidden_size_multiplier, device, dtype):
+    def __init__(self, layer_sizes, input_size, hidden_size_multiplier, samples_per_batch, device, dtype):
         super(DenseLSTM, self).__init__()
 
         self.output_sample_size = input_size * hidden_size_multiplier
@@ -102,29 +103,9 @@ class DenseLSTM(nn.Module):
         return x
 
 
-class OutLayer(nn.Module):
-    def __init__(self, in_channels, out_channels, num_convblocks, device, dtype):
-        super(OutLayer, self).__init__()
-
-        self.sequential = nn.Sequential(
-            nn.Upsample(scale_factor=2, mode='linear', align_corners=True),
-        )
-
-        for i in range(num_convblocks - 1):
-            self.sequential.add_module(f"convblock_{i}", ConvBlock1D(
-                in_channels=in_channels, out_channels=in_channels, device=device, dtype=dtype))
-
-        self.sequential.add_module(f"convblock_{i}", ConvBlock1D(
-            in_channels=in_channels, out_channels=out_channels, device=device, dtype=dtype))
-
-
-    def forward(self, x):
-        return self.sequential(x)
-
-
-class UNet1D(nn.Module):
+class ClarificationDenseLSTM(nn.Module):
     def __init__(self, in_channels, samples_per_batch, device, dtype):
-        super(UNet1D, self).__init__()
+        super(ClarificationDenseLSTM, self).__init__()
 
         layer_sizes = [64, 128, 256, 512, 1024]
 
@@ -136,8 +117,14 @@ class UNet1D(nn.Module):
         ]
         self.down_layers_module_list = nn.ModuleList(self.down_layers)
 
-        self.dense_lstm = DenseLSTM(layer_sizes=layer_sizes, input_size=400,
-                                    hidden_size_multiplier=3, device=device, dtype=dtype)
+        self.dense_lstm = DenseLSTM(
+            layer_sizes=layer_sizes, 
+            input_size=400,
+            hidden_size_multiplier=3, 
+            samples_per_batch=samples_per_batch,
+            device=device, 
+            dtype=dtype
+        )
 
         self.up_layers = [
             Up(
@@ -145,7 +132,7 @@ class UNet1D(nn.Module):
                 out_channels=layer_sizes[-(i+2)],
                 layer_sizes=layer_sizes,
                 layer_num=i,
-                lstm_out_sample_size=self.denseLSTM.output_sample_size,
+                lstm_out_sample_size=self.dense_lstm.output_sample_size,
                 samples_per_batch=samples_per_batch,
                 device=device,
                 dtype=dtype

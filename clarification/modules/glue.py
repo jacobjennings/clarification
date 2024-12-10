@@ -60,6 +60,11 @@ class Glue1D(nn.Module):
                 if in_sample_size * i < out_sample_size:
                     self.multiplier_factor = i
                     break
+            self.upsample = nn.Upsample(
+                scale_factor=self.multiplier_factor,
+                mode='linear',
+                align_corners=True
+            )
 
 
     def forward(self, x):
@@ -70,7 +75,7 @@ class Glue1D(nn.Module):
         x = self.sequential(x)
 
         if not self.is_downsample and self.multiplier_factor != 1:
-            x = nn.Upsample(scale_factor=self.multiplier_factor, mode='linear', align_corners=True)
+            x = self.upsample(x)
 
         x = nnF.interpolate(x, size=self.out_sample_size, mode='linear', align_corners=False)
 

@@ -1,0 +1,15 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Train Clarificaation Dense LSTM",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/train_dense_lstm.py",
+            "console": "integratedTerminal",
+            "env": {
+                "PYTORCH_ENABLE_MPS_FALLBACK": "1"
+            }
+        }
+    ]
+}

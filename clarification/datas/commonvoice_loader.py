@@ -1,68 +1,36 @@
 """Utility for loading mozilla common voice noisy / clear datasets."""
 
-import functools
-
-import argparse
-import copy
-import os
-import logging
-import secrets
-import numpy
-import copy
-import gc
-import math
-from datetime import timedelta
-# import mplcursors
-
-from ipywidgets import IntProgress
-# from IPython.display import display
-# from IPython.display import Audio
-from IPython import display
-
-import time
-
-# PyTorch model and training necessities
-import torch
-import torch.nn as nn
-import torch.nn.functional as nnF
-import torch.optim as optim
-from torch.utils.data import DataLoader, random_split
-
-from complexPyTorch.complexFunctions import complex_relu
-
-import auraloss
-
-# Audio
 import torchaudio
 import torchaudio.functional as F
 import torchaudio.transforms as T
 
-from torio.io import CodecConfig
-
-# Image datasets and image manipulation
-import torchvision
-import torchvision.transforms as transforms
-import torchvision.models as TVM
-
-# Image display
-import matplotlib.pyplot as plt
-import numpy as np
-
-# PyTorch TensorBoard support
+import torch
+from torch.utils.data import DataLoader, random_split
 from torch.utils.tensorboard import SummaryWriter
-
 
 class CommonVoiceLoader():
     """Utility for loading mozilla common voice noisy / clear datasets."""
 
-    def __init__(self, base_dataset_directory, noisy_dataset_directory, summary_writer, device):
+    def __init__(self, 
+                 base_dataset_directory, 
+                 noisy_dataset_directory, 
+                 summary_writer, 
+                 should_pin_memory,
+                 device):
         self.base_dataset_directory = base_dataset_directory
         self.noisy_dataset_directory = noisy_dataset_directory
         self.summary_writer = summary_writer
+        self.should_pin_memory = should_pin_memory
         self.device = device
+
+        self.noisy_loader = None
+        self.clear_loader = None
+        self.noisy_test = None
+        self.clear_test = None
 
 
     def create_loaders(self):
+        """Creates loaders"""
         loader_batch_size = 1
         
         common_voice_dataset = torchaudio.datasets.COMMONVOICE(root=self.base_dataset_directory)
@@ -80,8 +48,8 @@ class CommonVoiceLoader():
         clear_loader = DataLoader(
             noisy_train,
             batch_size=loader_batch_size,
-            pin_memory=True,
-            pin_memory_device=self.device,
+            pin_memory=self.should_pin_memory,
+            pin_memory_device=self.device if self.should_pin_memory else "",
             generator=clear_generator,
         )
 
@@ -91,8 +59,8 @@ class CommonVoiceLoader():
         noisy_loader = DataLoader(
             clear_train,
             batch_size=loader_batch_size,
-            pin_memory=True,
-            pin_memory_device=self.device,
+            pin_memory=self.should_pin_memory,
+            pin_memory_device=self.device if self.should_pin_memory else "",
             generator=noisy_generator,
         )
         
