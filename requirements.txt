@@ -10,7 +10,7 @@ more-itertools
 complexPyTorch
 mplcursors
 tensorboard
-typing-extensions== 4.5.0
+typing-extensions
 torch-tb-profiler
 autopep8
 auraloss

@@ -76,7 +76,6 @@ def train():
 
     loader.create_loaders()
 
-
     trainer = training.AudioTrainer(
         input_dataset_loader=loader.noisy_loader,
         golden_dataset_loader=loader.clear_loader,
@@ -84,13 +83,13 @@ def train():
         loss_function_tuples=loss_functions,
         sample_rate=sample_rate,
         samples_per_batch=samples_per_batch,
-        batches_per_iteration=24,
+        batches_per_iteration=20,
         device=device,
         model_weights_dir=models_dir,
         model_weights_save_every_iterations=2000,
         summary_writer=summary_writer,
         send_audio_clip_every_iterations=100
-        
+
     )
 
     trainer.train()

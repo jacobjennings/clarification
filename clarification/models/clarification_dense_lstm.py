@@ -14,6 +14,7 @@ from ..modules.conv_block import ConvBlock1D
 from ..modules.out_layer import OutLayer
 from ..modules.glue import Glue1D
 
+
 class Down(nn.Module):
     def __init__(self, in_channels, out_channels, device, dtype):
         super(Down, self).__init__()
@@ -28,7 +29,8 @@ class Down(nn.Module):
 
 
 class Up(nn.Module):
-    def __init__(self, in_channels, out_channels, layer_sizes, layer_num, lstm_out_sample_size, samples_per_batch, device, dtype):
+    def __init__(self, in_channels, out_channels, layer_sizes, layer_num, lstm_out_sample_size, samples_per_batch,
+                 device, dtype):
         super(Up, self).__init__()
 
         self.layer_num = layer_num
@@ -47,8 +49,11 @@ class Up(nn.Module):
 
         print(f"out_channels: {out_channels}")
 
-        self.transpose = nn.ConvTranspose1d(in_channels=in_channels, out_channels=in_channels //
-                                            2, kernel_size=2, stride=2, device=device, dtype=dtype)
+        self.transpose = nn.ConvTranspose1d(in_channels=in_channels,
+                                            out_channels=in_channels // 2,
+                                            kernel_size=2,
+                                            stride=2,
+                                            device=device, dtype=dtype)
         self.conv_block = ConvBlock1D(in_channels=in_channels, out_channels=out_channels, device=device, dtype=dtype)
         self.lstm_matcher = Glue1D(
             in_channels=max_layer_size,
@@ -83,9 +88,9 @@ class DenseLSTM(nn.Module):
 
         print(f"down_stacked_size: {down_stacked_size}")
 
-        # self.pre_lstm_reduction = nn.Conv1d(in_channels=down_stacked_size, out_channels=max_layer_size, kernel_size=2, stride=2, device=device, dtype=dtype)
         self.pre_lstm_reduction = Glue1D(in_channels=down_stacked_size, out_channels=max_layer_size,
-                                         in_sample_size=samples_per_batch // 2, out_sample_size=input_size, device=device, dtype=dtype)
+                                         in_sample_size=samples_per_batch // 2, out_sample_size=input_size,
+                                         device=device, dtype=dtype)
         self.lstm = nn.LSTM(input_size=input_size, hidden_size=input_size * hidden_size_multiplier,
                             num_layers=1, batch_first=True, device=device, dtype=dtype)
 
@@ -112,24 +117,24 @@ class ClarificationDenseLSTM(nn.Module):
         self.first_layer = ConvBlock1D(in_channels=in_channels, out_channels=layer_sizes[0], device=device, dtype=dtype)
 
         self.down_layers = [
-            Down(in_channels=layer_sizes[i], out_channels=layer_sizes[i+1], device=device, dtype=dtype)
+            Down(in_channels=layer_sizes[i], out_channels=layer_sizes[i + 1], device=device, dtype=dtype)
             for i in range(len(layer_sizes) - 1)
         ]
         self.down_layers_module_list = nn.ModuleList(self.down_layers)
 
         self.dense_lstm = DenseLSTM(
-            layer_sizes=layer_sizes, 
+            layer_sizes=layer_sizes,
             input_size=400,
-            hidden_size_multiplier=3, 
+            hidden_size_multiplier=3,
             samples_per_batch=samples_per_batch,
-            device=device, 
+            device=device,
             dtype=dtype
         )
 
         self.up_layers = [
             Up(
-                in_channels=layer_sizes[-(i+1)],
-                out_channels=layer_sizes[-(i+2)],
+                in_channels=layer_sizes[-(i + 1)],
+                out_channels=layer_sizes[-(i + 2)],
                 layer_sizes=layer_sizes,
                 layer_num=i,
                 lstm_out_sample_size=self.dense_lstm.output_sample_size,
