@@ -101,7 +101,8 @@ class AudioTrainer:
                                            files_processed / (time.time() - self.epoch_start_time),
                                            self.iteration_count)
 
-            if self.iteration_count % self.model_weights_save_every_iterations == 0:
+            if (self.iteration_count % self.model_weights_save_every_iterations == 0
+                    and self.model_weights_save_every_iterations != 0):
                 time_string = time.strftime("%Y%m%d-%H%M%S")
                 for model_name, model, _, _ in self.models:
                     model_save_path = self.model_weights_dir + f"/{model_name}-{time_string}"

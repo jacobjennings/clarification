@@ -1,6 +1,7 @@
 """Training binary."""
 import os
 import platform
+import argparse
 
 import torch
 import torch.nn as nn
@@ -10,7 +11,6 @@ import auraloss
 import clarification
 
 from torch.utils.tensorboard import SummaryWriter
-
 
 def train():
     summary_writer = SummaryWriter()
@@ -63,10 +63,6 @@ def train():
         simple_maker("simple7", [300, 500, 900]),
     ]
 
-    models = [
-        nn.DataParallel(model) for model in models
-    ]
-
     for model_tuple in models:
         total_params = sum(p.numel() for p in model_tuple[1].parameters())
         summary_writer.add_scalar(f"total_params_{model_tuple[0]}", total_params)
@@ -100,7 +96,7 @@ def train():
         device=device,
         overlap_samples=overlap_samples,
         model_weights_dir=models_dir,
-        model_weights_save_every_iterations=2000,
+        model_weights_save_every_iterations=1000,
         summary_writer=summary_writer,
         send_audio_clip_every_iterations=100
     )

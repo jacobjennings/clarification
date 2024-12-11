@@ -45,7 +45,7 @@ class CommonVoiceLoader():
             batch_size=loader_batch_size,
             pin_memory=self.should_pin_memory,
             pin_memory_device=self.device if self.should_pin_memory else "",
-            generator=split_generator,
+            generator=loader_generator,
         )
 
         test_loader = DataLoader(
