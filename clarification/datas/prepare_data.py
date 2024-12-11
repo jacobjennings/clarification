@@ -82,9 +82,9 @@ def process_file(data):
 
     # print("2")
 
-    if num_processed.value >= 5000:
-        print("DONE")
-        return
+    # if num_processed.value >= 5000:
+    #     print("DONE")
+    #     return
 
     if num_processed.value % 500 == 0 and num_processed.value != 0:
         t1 = time.time()

@@ -124,6 +124,8 @@ class AudioTrainer:
 
         files_processed = 0
 
+        perf_iteration_start = time.perf_counter()
+
         if remaining_input_batches is not None:
             input_subsamples = remaining_input_batches
             golden_subsamples = remaining_golden_batches
@@ -164,10 +166,30 @@ class AudioTrainer:
 
         golden_reconstructed = self.reconstruct_overlapping_samples_nofade(golden_subsamples)
 
+        perf_data_prep_end = time.perf_counter()
+        self.summary_writer.add_scalar(
+            "perf_data_prep", perf_data_prep_end - perf_iteration_start, self.iteration_count)
+
+        if should_record_audio_clips:
+            noisy_audio = self.reconstruct_overlapping_samples_nofade(input_subsamples).cpu().detach()
+            clear_audio = golden_reconstructed.cpu().detach()
+
+            self.summary_writer.add_audio(f"noisy_audio", noisy_audio,
+                                          sample_rate=self.sample_rate, global_step=self.iteration_count)
+            self.summary_writer.add_audio(f"clear_audio", clear_audio,
+                                          sample_rate=self.sample_rate, global_step=self.iteration_count)
+
         for model_idx, (model_name, model, optimizer, scheduler) in enumerate(self.models):
             model.train()
 
+            perf_model_train_prediction_start = time.perf_counter()
             prediction_raw = model(input_subsamples.unsqueeze(dim=1)).squeeze(dim=1)
+            perf_model_train_prediction_end = time.perf_counter()
+
+            self.summary_writer.add_scalar(
+                f"perf_model_train_prediction_{model_name}",
+                perf_model_train_prediction_end - perf_model_train_prediction_start, self.iteration_count)
+
             prediction = self.reconstruct_overlapping_samples(prediction_raw)
 
             if should_record_audio_clips:
@@ -175,6 +197,7 @@ class AudioTrainer:
 
             loss = None
             for loss_name, loss_weight, loss_fn in self.loss_function_tuples:
+                perf_loss_start = time.perf_counter()
                 loss_out = loss_fn(prediction, golden_reconstructed)
                 loss_out_weighted = loss_out * loss_weight
 
@@ -187,13 +210,22 @@ class AudioTrainer:
                 else:
                     loss = loss_out_weighted
 
+                perf_loss_end = time.perf_counter()
+                self.summary_writer.add_scalar(
+                    f"perf_loss_{loss_name}_{model_name}", perf_loss_end - perf_loss_start, self.iteration_count)
+
             self.summary_writer.add_scalar(f"total_loss_model_{model_name}", loss.item(), self.iteration_count)
 
             del prediction
 
             optimizer.zero_grad()
 
+            perf_loss_backward_start = time.perf_counter()
             loss.backward()
+            perf_loss_backward_end = time.perf_counter()
+            self.summary_writer.add_scalar(
+                f"perf_loss_backward_{model_name}",
+                perf_loss_backward_end - perf_loss_backward_start, self.iteration_count)
 
             self.summary_writer.add_scalar(f"memory_post_backprop_allocated_model_{model_name}",
                                            torch.cuda.memory_allocated(0), self.iteration_count)
@@ -204,21 +236,25 @@ class AudioTrainer:
 
             del loss
 
+            perf_optimizer_step_start = time.perf_counter()
             optimizer.step()
+            perf_optimizer_step_end = time.perf_counter()
+            self.summary_writer.add_scalar(
+                f"perf_optimizer_step_{model_name}",
+                perf_optimizer_step_end - perf_optimizer_step_start, self.iteration_count)
+
             if scheduler:
                 scheduler.step()
 
+            perf_eval_start = time.perf_counter()
             model.eval()
+            perf_eval_end = time.perf_counter()
+            self.summary_writer.add_scalar(
+                f"perf_eval_{model_name}", perf_eval_end - perf_eval_start, self.iteration_count)
 
             if should_record_audio_clips:
                 if prediction_cpu is not None:
-                    noisy_audio = self.reconstruct_overlapping_samples_nofade(input_subsamples).cpu().detach()
-                    clear_audio = golden_reconstructed.cpu().detach()
-                    self.summary_writer.add_audio(f"noisy_audio_{model_name}", noisy_audio,
-                                                  sample_rate=self.sample_rate, global_step=self.iteration_count)
                     self.summary_writer.add_audio(f"prediction_audio_{model_name}", prediction_cpu,
-                                                  sample_rate=self.sample_rate, global_step=self.iteration_count)
-                    self.summary_writer.add_audio(f"clear_audio_{model_name}", clear_audio,
                                                   sample_rate=self.sample_rate, global_step=self.iteration_count)
                 else:
                     print("prediction_cpu is None!")
