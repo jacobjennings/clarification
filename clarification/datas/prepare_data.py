@@ -9,6 +9,7 @@ import threading
 import concurrent.futures
 import multiprocessing
 import itertools
+import csv
 
 from ipywidgets import IntProgress
 from IPython.display import display
@@ -46,10 +47,16 @@ base_dataset_directory = '/home/jacob/cv-corpus-17.0-2024-03-15/en'
 
 # Uncomment these. Safety measure to avoid accidental use.
 
-# resampled_clear_dataset_directory = '/home/jacob/noisy-commonvoice-48k/en/clear'
-# noisy_dataset_directory = '/home/jacob/noisy-commonvoice-48k/en/noisy'
+out_dataset_directory = '/home/jacob/noisy-commonvoice-24k-300ms-10ms/en'
 
 num_processed = Value("l", 0)
+
+sample_ms = 300
+overlap_ms = 10
+
+resample_rate = 24000
+sample_size = int((sample_ms / 1000) * resample_rate)
+overlap_size = int((overlap_ms / 1000) * resample_rate)
 
 
 class AddGaussianNoise(object):
@@ -64,11 +71,20 @@ class AddGaussianNoise(object):
         return self.__class__.__name__ + '(mean={0}, std={1})'.format(self.mean, self.std)
 
 
-def noisify_file(data):
+def overlapping_samples(audio, sample_size, overlap_size):
+    chunks = audio.unfold(dimension=0, size=sample_size, step=sample_size - overlap_size)
+    return chunks
+
+
+def process_file(data):
     # print("1")
     add_noise = AddGaussianNoise(std=0.1)
 
     # print("2")
+
+    if num_processed.value >= 5000:
+        print("DONE")
+        return
 
     if num_processed.value % 500 == 0 and num_processed.value != 0:
         t1 = time.time()
@@ -82,6 +98,8 @@ def noisify_file(data):
             f"Remaining estimated hours: {(data_loader_len - num_processed.value) / files_per_second / 60 / 60:.2f}")
 
     num_processed.value += 1
+
+    # print(f"Data[2]: {data[2]}")
 
     filename = data[2]["path"][0]
     original_waveform = data[0].squeeze()
@@ -102,30 +120,50 @@ def noisify_file(data):
 
     # print("6")
 
-
     # print(f"resampled_clear: {resampled_clear.size()}")
 
     noisy_waveform = add_noise(resampled_clear)
 
-    noisy_waveform = noisy_waveform.unsqueeze(1)
-
     # print(f"noisy_waveform: {noisy_waveform.size()}")
 
-    torchaudio.save(
-        uri=f"{resampled_clear_dataset_directory}/clips/{filename}",
-        src=resampled_clear.unsqueeze(1),
-        sample_rate=resample_rate,
-        format="mp3",
-        channels_first=False
-    )
+    resampled_clear_chunks = overlapping_samples(resampled_clear, sample_size=sample_size, overlap_size=overlap_size)
 
-    torchaudio.save(
-        uri=f"{noisy_dataset_directory}/clips/{filename}",
-        src=noisy_waveform,
-        sample_rate=resample_rate,
-        format="mp3",
-        channels_first=False
-    )
+    noisy_chunks = overlapping_samples(noisy_waveform, sample_size=sample_size, overlap_size=overlap_size)
+
+    with open(f"{out_dataset_directory}/info.csv", 'a', newline='\n') as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+
+        filename_no_ext = filename.removesuffix(".mp3")
+
+        noisy_path = f"{filename_no_ext}_noisy"
+        clear_path = f"{filename_no_ext}_clear"
+
+        writer.writerow({
+            "noisy_path": noisy_path,
+            "clear_path": clear_path,
+            "chunk_count": len(noisy_chunks),
+            "sentence_id": data[2]["sentence_id"]
+        })
+
+        for idx, (noisy_chunk, clear_chunk) in enumerate(zip(noisy_chunks, resampled_clear_chunks)):
+            noisy_path_absolute = f"{out_dataset_directory}/clips/{filename_no_ext}_noisy_{idx}.mp3"
+            clear_path_absolute = f"{out_dataset_directory}/clips/{filename_no_ext}_clear_{idx}.mp3"
+
+            torchaudio.save(
+                uri=noisy_path_absolute,
+                src=noisy_chunk.unsqueeze(1),
+                sample_rate=resample_rate,
+                format="mp3",
+                channels_first=False
+            )
+
+            torchaudio.save(
+                uri=clear_path_absolute,
+                src=clear_chunk.unsqueeze(1),
+                sample_rate=resample_rate,
+                format="mp3",
+                channels_first=False
+            )
 
     # print("3")
 
@@ -135,8 +173,6 @@ def noisify_file(data):
 if __name__ == '__main__':
     print(torch.__version__)
     print(torchaudio.__version__)
-
-    resample_rate = 24000
 
     training_speech_dataset = torchaudio.datasets.COMMONVOICE(root=base_dataset_directory)
 
@@ -153,6 +189,11 @@ if __name__ == '__main__':
     print(f"Detected {os.cpu_count()} cpus.")
 
     data_loader_len = len(data_loader)
+
+    with open(f"{out_dataset_directory}/info.csv", 'w', newline='\n') as csvfile:
+        fieldnames = ['noisy_path', 'clear_path', 'chunk_count', 'sentence_id']
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        # writer.writeheader()
 
     t0 = time.time()
 
@@ -172,7 +213,5 @@ if __name__ == '__main__':
     #         print(result)
 
     with Pool(processes=process_count) as pool:
-        for i in pool.imap_unordered(noisify_file, data_loader, chunksize=process_count):
+        for i in pool.imap_unordered(process_file, data_loader, chunksize=process_count):
             pass
-
-

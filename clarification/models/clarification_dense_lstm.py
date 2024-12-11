@@ -4,75 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as nnF
 
-import torchaudio
-import torchaudio.functional as F
-import torchaudio.transforms as T
-
-from torch.utils.tensorboard import SummaryWriter
-
-from ..modules.conv_block import ConvBlock1D
-from ..modules.out_layer import OutLayer
-from ..modules.glue import Glue1D
-
-
-class Down(nn.Module):
-    def __init__(self, in_channels, out_channels, device, dtype):
-        super(Down, self).__init__()
-
-        self.sequential = nn.Sequential(
-            nn.MaxPool1d(kernel_size=2, stride=2),
-            ConvBlock1D(in_channels=in_channels, out_channels=out_channels, device=device, dtype=dtype)
-        )
-
-    def forward(self, x):
-        return self.sequential(x)
-
-
-class Up(nn.Module):
-    def __init__(self, in_channels, out_channels, layer_sizes, layer_num, lstm_out_sample_size, samples_per_batch,
-                 device, dtype):
-        super(Up, self).__init__()
-
-        self.layer_num = layer_num
-
-        max_layer_size = 0
-        for layer_size in layer_sizes[1:]:
-            max_layer_size = max(max_layer_size, layer_size)
-
-        first_up_layer_sample_size = samples_per_batch
-        for i in range(len(layer_sizes) - 1):
-            first_up_layer_sample_size = first_up_layer_sample_size // 2
-
-        in_sample_size = first_up_layer_sample_size * 2
-        for i in range(layer_num):
-            in_sample_size = in_sample_size * 2
-
-        print(f"out_channels: {out_channels}")
-
-        self.transpose = nn.ConvTranspose1d(in_channels=in_channels,
-                                            out_channels=in_channels // 2,
-                                            kernel_size=2,
-                                            stride=2,
-                                            device=device, dtype=dtype)
-        self.conv_block = ConvBlock1D(in_channels=in_channels, out_channels=out_channels, device=device, dtype=dtype)
-        self.lstm_matcher = Glue1D(
-            in_channels=max_layer_size,
-            out_channels=in_channels,
-            in_sample_size=lstm_out_sample_size,
-            out_sample_size=in_sample_size,
-            device=device, dtype=dtype)
-
-    def forward(self, x, down_output, lstm_output):
-        lstm_time_normalized = self.lstm_matcher(lstm_output)
-        x = self.transpose(x)
-        diff = down_output.size()[1] - x.size()[1]  # Calculate difference correctly
-        x = nnF.pad(x, (diff // 2, diff - diff // 2))
-        x = torch.cat([down_output, x], dim=1)
-        x = x + lstm_time_normalized
-        x = self.conv_block(x)
-
-        return x
-
+from ..modules import ConvBlock1D, OutLayer, Glue1D, Down, UpWithLSTMInput
 
 class DenseLSTM(nn.Module):
     def __init__(self, layer_sizes, input_size, hidden_size_multiplier, samples_per_batch, device, dtype):
@@ -132,7 +64,7 @@ class ClarificationDenseLSTM(nn.Module):
         )
 
         self.up_layers = [
-            Up(
+            UpWithLSTMInput(
                 in_channels=layer_sizes[-(i + 1)],
                 out_channels=layer_sizes[-(i + 2)],
                 layer_sizes=layer_sizes,
