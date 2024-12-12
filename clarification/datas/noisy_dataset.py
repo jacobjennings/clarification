@@ -1,30 +1,27 @@
 import csv
 
+import torch
 from torch.utils.data import Dataset
-
-import torchaudio
-
+import h5py
 
 class NoisyCommonsDataset(Dataset):
-    def __init__(self, base_dir='/home/jacob/noisy-commonvoice-24k-300ms-10ms/en'):
+    def __init__(self, batch_size, base_dir='/workspace/noisy-commonvoice-24k-300ms-10ms-h5py/en'):
         self.base_dir = base_dir
-        with open(f"{base_dir}/info.csv") as f:
-            self.chunk_datas = list(csv.reader(f))
+        bigfile = h5py.File(base_dir + "/clarification-dataset.hdf5", 'r')
+        self.dataset = bigfile['noisy_clear_samples_300ms_10ms_overlap']
+        self.batch_size = batch_size
 
     def __len__(self):
-        return len(self.chunk_datas)
+        return len(self.dataset) // self.batch_size
 
-    def __getitem__(self, idx):
-        data = self.chunk_datas[idx]
+    def __getitem__(self, batch_idx):
+        idx = batch_idx * self.batch_size
 
-        noisy_chunks = []
-        clear_chunks = []
-        for idx in range(int(data[2])):
-            noisy_path = self.base_dir + "/clips/" + data[0] + "_" + str(idx) + ".mp3"
-            clear_path = self.base_dir + "/clips/" + data[1] + "_" + str(idx) + ".mp3"
-            noisy, _ = torchaudio.load(noisy_path)
-            clear, _ = torchaudio.load(clear_path)
-            noisy_chunks.append(noisy)
-            clear_chunks.append(clear)
+        datas = [
+            torch.from_numpy(self.dataset[idx])
+            for idx in range(idx, idx + self.batch_size)
+        ]
 
-        return noisy_chunks, clear_chunks, data
+        stacked = torch.stack(datas)
+
+        return stacked

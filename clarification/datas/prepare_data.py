@@ -12,6 +12,8 @@ import itertools
 import csv
 import pathlib
 
+import h5py
+
 from ipywidgets import IntProgress
 from IPython.display import display
 from IPython.display import Audio
@@ -47,7 +49,7 @@ from torch.utils.tensorboard import SummaryWriter
 base_dataset_directory = '/home/jacob/cv-corpus-17.0-2024-03-15/en'
 
 # Uncomment these. Safety measure to avoid accidental use.
-out_dataset_directory = '/workspace/noisy-commonvoice-24k-300ms-10ms/en'
+out_dataset_directory = '/workspace/noisy-commonvoice-24k-300ms-10ms-h5py/en'
 
 num_processed = Value("l", 0)
 
@@ -78,67 +80,41 @@ def overlapping_samples(audio, sample_size, overlap_size):
 def process_file(data):
     add_noise = AddGaussianNoise(std=0.1)
 
-    data, megachunk_idx, (data_loader_len, t0, sample_size, overlap_size, resample_rate) = data
+    data_batch, megachunk_idx, (data_loader_len, t0, sample_size, overlap_size, resample_rate) = data
 
-    clips_dir = f"{out_dataset_directory}/{megachunk_idx}/clips"
-    pathlib.Path(clips_dir).mkdir(parents=True, exist_ok=True)
+    resampled_clear_chunks_aggregate = None
+    noisy_chunks_aggregate = None
+    for data in data_batch:
+        if num_processed.value % 500 == 0 and num_processed.value != 0:
+            t1 = time.time()
+            elapsed = t1 - t0
+            files_per_second = num_processed.value / elapsed
+            print(
+                f"Processed {num_processed.value}/{data_loader_len} files "
+                f"({num_processed.value / data_loader_len * 100:.0f}%). "
+                f"Elapsed: {elapsed:.0f}s. "
+                f"Files/second: {files_per_second:.0f}. "
+                f"Remaining estimated hours: {(data_loader_len - num_processed.value) / files_per_second / 60 / 60:.2f}")
 
-    if num_processed.value % 500 == 0 and num_processed.value != 0:
-        t1 = time.time()
-        elapsed = t1 - t0
-        files_per_second = num_processed.value / elapsed
-        print(
-            f"Processed {num_processed.value}/{data_loader_len} files "
-            f"({num_processed.value / data_loader_len * 100:.0f}%). "
-            f"Elapsed: {elapsed:.0f}s. "
-            f"Files/second: {files_per_second:.0f}. "
-            f"Remaining estimated hours: {(data_loader_len - num_processed.value) / files_per_second / 60 / 60:.2f}")
+        num_processed.value += 1
+        original_waveform = data[0].squeeze()
+        sample_rate = data[1][0].item()
+        resampler = TAT.Resample(sample_rate, resample_rate, dtype=torch.float32).to("cuda")
+        # with resample_lock:
+        resampled_clear = resampler(original_waveform.to("cuda"))
+        noisy_waveform = add_noise(resampled_clear)
+        resampled_clear_chunks = overlapping_samples(resampled_clear, sample_size=sample_size, overlap_size=overlap_size)
+        noisy_chunks = overlapping_samples(noisy_waveform, sample_size=sample_size, overlap_size=overlap_size)
+        if resampled_clear_chunks_aggregate is not None:
+            resampled_clear_chunks_aggregate = torch.cat([resampled_clear_chunks_aggregate, resampled_clear_chunks], dim=0)
+            noisy_chunks_aggregate = torch.cat([noisy_chunks_aggregate, noisy_chunks], dim=0)
+        else:
+            resampled_clear_chunks_aggregate = resampled_clear_chunks
+            noisy_chunks_aggregate = noisy_chunks
 
-    num_processed.value += 1
-    filename = data[2]["path"][0]
-    original_waveform = data[0].squeeze()
-    sample_rate = data[1][0].item()
-    resampler = TAT.Resample(sample_rate, resample_rate, dtype=torch.float32).to("cuda")
-    # with resample_lock:
-    resampled_clear = resampler(original_waveform.to("cuda"))
-    noisy_waveform = add_noise(resampled_clear)
-    resampled_clear_chunks = overlapping_samples(resampled_clear, sample_size=sample_size, overlap_size=overlap_size)
-    noisy_chunks = overlapping_samples(noisy_waveform, sample_size=sample_size, overlap_size=overlap_size)
-    with open(f"{out_dataset_directory}/{megachunk_idx}/info.csv", 'a', newline='\n') as csvfile:
-        fieldnames = ['noisy_path', 'clear_path', 'chunk_count', 'sentence_id']
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        filename_no_ext = filename.removesuffix(".mp3")
+    pairs = torch.stack([noisy_chunks_aggregate, resampled_clear_chunks_aggregate], dim=1).to("cpu")
 
-        for idx, (noisy_chunk, clear_chunk) in enumerate(zip(noisy_chunks.to("cpu"), resampled_clear_chunks.to("cpu"))):
-            noisy_path = f"{filename_no_ext}_noisy_{idx}.wav"
-            clear_path = f"{filename_no_ext}_clear_{idx}.wav"
-
-            noisy_path_absolute = f"{out_dataset_directory}/{megachunk_idx}/clips/{filename_no_ext}_noisy_{idx}.wav"
-            clear_path_absolute = f"{out_dataset_directory}/{megachunk_idx}/clips/{filename_no_ext}_clear_{idx}.wav"
-
-            torchaudio.save(
-                uri=noisy_path_absolute,
-                src=noisy_chunk.unsqueeze(1),
-                sample_rate=resample_rate,
-                format="wav",
-                channels_first=False
-            )
-
-            torchaudio.save(
-                uri=clear_path_absolute,
-                src=clear_chunk.unsqueeze(1),
-                sample_rate=resample_rate,
-                format="wav",
-                channels_first=False
-            )
-
-            writer.writerow({
-                "noisy_path": noisy_path,
-                "clear_path": clear_path,
-                "sentence_id": data[2]["sentence_id"]
-            })
-
-    return filename
+    return pairs
 
 
 class ChunkIterable:
@@ -152,7 +128,7 @@ class ChunkIterable:
     def __iter__(self):
         return self
 
-    def __next__(self): # Python 2: def next(self)
+    def __next__(self):
         chunk_count = 0
         with self.lock:
             self.count += 1
@@ -195,24 +171,32 @@ def process_data():
 
     num_megachunks = 0
 
-    with open(f"{out_dataset_directory}/info.csv", 'w', newline='\n') as csvfile:
-        fieldnames = ['num_megachunks', 'sample_rate', 'sample_size', 'overlap_size']
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerow({
-            "num_megachunks": num_megachunks,
-            "sample_rate": resample_rate,
-            "sample_size": sample_size,
-            "overlap_size": overlap_size
-        })
+    outfile = h5py.File(f"{out_dataset_directory}/clarification-dataset.hdf5", 'w')
+    outfile_dataset = outfile.create_dataset(
+        "noisy_clear_samples_300ms_10ms_overlap",
+        shape=(20000000, 2, sample_size), #  20000000
+        maxshape=(None, 2, sample_size),
+        chunks=(5, 2, sample_size),
+        dtype=numpy.float32
+    )
 
     chunk_iter = ChunkIterable(megachunk_size, data_loader_len)
-    batched_dataset = zip(
-        data_loader, chunk_iter, itertools.repeat((data_loader_len, t0, sample_size, overlap_size, resample_rate)))
+    zipped_dataset = zip(
+        itertools.batched(data_loader, 16), chunk_iter, itertools.repeat((data_loader_len, t0, sample_size, overlap_size, resample_rate)))
+
+    write_index = 0
 
     with Pool(processes=process_count) as pool:
-        for i in pool.imap_unordered(process_file, batched_dataset, chunksize=8):
-            pass
+        for pairs in pool.imap_unordered(process_file, zipped_dataset, chunksize=8):
+            outfile_size = outfile_dataset.shape[0]
+            pair_size = pairs.shape[0]
+
+            if write_index + pair_size > outfile_size:
+                outfile_dataset.resize(outfile_size + pair_size, axis=0)
+
+            outfile_dataset[write_index:write_index + pair_size] = pairs
+            write_index += pair_size
+
 
 if __name__ == '__main__':
     process_data()

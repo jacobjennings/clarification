@@ -17,10 +17,12 @@ class CommonVoiceLoader():
     def __init__(self,
                  base_dir,
                  summary_writer,
+                 batch_size,
                  should_pin_memory,
                  device):
         self.base_dir = base_dir
         self.summary_writer = summary_writer
+        self.batch_size = batch_size
         self.should_pin_memory = should_pin_memory
         self.device = device
 
@@ -29,9 +31,7 @@ class CommonVoiceLoader():
 
     def create_loaders(self):
         """Creates loaders"""
-        loader_batch_size = 1
-
-        dataset = noisy_dataset.NoisyCommonsDataset(base_dir=self.base_dir)
+        dataset = noisy_dataset.NoisyCommonsDataset(batch_size=self.batch_size, base_dir=self.base_dir)
 
         split_generator = torch.Generator()
         train, test = random_split(dataset, [0.9, 0.1], generator=split_generator)
@@ -42,7 +42,7 @@ class CommonVoiceLoader():
 
         train_loader = DataLoader(
             train,
-            batch_size=loader_batch_size,
+            batch_size=1,
             pin_memory=self.should_pin_memory,
             pin_memory_device=self.device if self.should_pin_memory else "",
             generator=loader_generator,
@@ -50,7 +50,7 @@ class CommonVoiceLoader():
 
         test_loader = DataLoader(
             test,
-            batch_size=loader_batch_size,
+            batch_size=1,
             pin_memory=self.should_pin_memory,
             pin_memory_device=self.device if self.should_pin_memory else "",
         )

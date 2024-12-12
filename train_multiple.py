@@ -1,6 +1,7 @@
 """Training binary."""
 import platform
 import getpass
+import pathlib
 
 import torch
 import torch.nn as nn
@@ -21,14 +22,16 @@ def train():
 
     models_dir = "."
     if mac:
-        base_dataset_directory = '/Users/jacobjennings/noisy-commonvoice-24k-300ms-10ms/en/clear'
+        base_dataset_directory = '/Users/jacobjennings/noisy-commonvoice-24k-300ms-10ms-h5py/en'
         models_dir = '/Users/jacobjennings/denoise-models/2'
     elif is_cloud:
-        base_dataset_directory = '/workspace/noisy-commonvoice-24k-300ms-10ms/en'
+        base_dataset_directory = '/workspace/noisy-commonvoice-24k-300ms-10ms-h5py/en'
         models_dir = '/workspace/weights'
     else:
-        base_dataset_directory = '/home/jacob/noisy-commonvoice-24k-300ms-10ms/en'
-        models_dir = '/home/jacob/denoise-models/2'
+        base_dataset_directory = '/workspace/noisy-commonvoice-24k-300ms-10ms-h5py/en'
+        models_dir = '/workspace/weights'
+
+    pathlib.Path(models_dir).mkdir(parents=True, exist_ok=True)
 
     if device == "cuda":
         torch.cuda.empty_cache()
@@ -80,15 +83,19 @@ def train():
         ("SISDRLoss", 1.5, auraloss.time.SISDRLoss()),
         ("MelSTFTLoss", 0.5, auraloss.freq.MelSTFTLoss(sample_rate=sample_rate, n_mels=128, device=device)),
     ]
+    batches_per_iteration = 70
 
     loader = clarification.datas.commonvoice_loader.CommonVoiceLoader(
         base_dir=base_dataset_directory,
         summary_writer=summary_writer,
+        batch_size=batches_per_iteration,
         should_pin_memory=device == "cuda",
         device=device
     )
 
     loader.create_loaders()
+
+    summary_writer.add_text("loader_info", f"Training data size in batches: {len(loader.train_loader)}, samples: {len(loader.train_loader) * samples_per_batch}")
 
     trainer = clarification.training.AudioTrainer(
         input_dataset_loader=loader.train_loader,
@@ -102,7 +109,8 @@ def train():
         model_weights_dir=models_dir,
         model_weights_save_every_iterations=1000,
         summary_writer=summary_writer,
-        send_audio_clip_every_iterations=100
+        send_audio_clip_every_iterations=100,
+        dataset_batches_length=len(loader.train_loader),
     )
 
     trainer.train()

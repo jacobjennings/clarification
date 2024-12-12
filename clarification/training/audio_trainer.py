@@ -27,6 +27,7 @@ class AudioTrainer:
             model_weights_save_every_iterations: int = None,
             summary_writer: Optional[SummaryWriter] = None,
             send_audio_clip_every_iterations: int = 100,
+            dataset_batches_length: int = None
     ):
         """Training loop for audio.
         
@@ -55,53 +56,57 @@ class AudioTrainer:
         self.model_weights_save_every_iterations = model_weights_save_every_iterations
         self.summary_writer = summary_writer
         self.send_audio_clip_every_iterations = send_audio_clip_every_iterations
+        self.dataset_batches_length = dataset_batches_length
 
         self.samples_per_iteration = self.samples_per_batch * self.batches_per_iteration
         self.iteration_count = 0
         self.epoch_start_time = None
-        self.files_processed = 0
+        self.epoch_count = 0
+        self.samples_processed = 0
         self.train_start_time = None
 
     def train(self):
         self.train_start_time = time.time()
-        files_processed = 0
 
         gc.collect()
         torch.cuda.empty_cache()
 
-        epoch_count = 0
-        self.iteration_count = 0
-
         while True:
             self.train_epoch()
-            epoch_count += 1
-            self.summary_writer.add_scalar("epoch", epoch_count)
+            self.epoch_count += 1
+            self.summary_writer.add_scalar("epoch", self.epoch_count)
 
     def train_epoch(self):
         self.epoch_start_time = time.time()
 
         input_loader_iter = iter(self.input_dataset_loader)
 
-        remaining_input_batches = None
-        remaining_golden_batches = None
-
         continue_training = True
         while continue_training:
             send_audio_clips = self.iteration_count % self.send_audio_clip_every_iterations == 0
             result = self.train_iteration(
                 input_loader_iter=input_loader_iter,
-                remaining_input_batches=remaining_input_batches,
-                remaining_golden_batches=remaining_golden_batches,
                 should_record_audio_clips=send_audio_clips
             )
             continue_training = result.continue_training
-            self.files_processed += result.files_processed_during_iteration
-            remaining_input_batches = result.remaining_input_batches
-            remaining_golden_batches = result.remaining_golden_batches
-            self.summary_writer.add_scalar("files_processed", self.files_processed, self.iteration_count)
-            self.summary_writer.add_scalar("files_processed_per_second",
-                                           self.files_processed / (time.time() - self.train_start_time),
-                                           self.iteration_count)
+
+            if self.iteration_count % 15 == 0 and self.iteration_count != 0:
+                elapsed_training_time = time.time() - self.train_start_time
+                self.summary_writer.add_scalar("samples_processed", self.samples_processed, self.iteration_count)
+                self.summary_writer.add_scalar("samples_processed_per_microsecond",
+                                               self.samples_processed / elapsed_training_time / 1000 / 1000,
+                                               self.iteration_count)
+                self.summary_writer.add_scalar("iterations_per_second",
+                                               self.iteration_count / elapsed_training_time,
+                                               self.iteration_count)
+                batches_complete = self.iteration_count * self.batches_per_iteration
+                batches_per_second = batches_complete / elapsed_training_time
+                self.summary_writer.add_scalar("epoch_percentage_complete",
+                                               batches_complete / self.dataset_batches_length * 100,
+                                               self.iteration_count)
+                self.summary_writer.add_scalar("epoch_estimated_time_per_epoch_minutes",
+                                               self.dataset_batches_length / batches_per_second / 60,
+                                               self.iteration_count)
 
             if (self.iteration_count % self.model_weights_save_every_iterations == 0
                     and self.model_weights_save_every_iterations != 0):
@@ -118,53 +123,20 @@ class AudioTrainer:
     def train_iteration(
             self,
             input_loader_iter,
-            remaining_input_batches,
-            remaining_golden_batches,
             should_record_audio_clips: bool):
-
-        files_processed = 0
 
         perf_iteration_start = time.perf_counter()
 
-        if remaining_input_batches is not None:
-            input_subsamples = remaining_input_batches
-            golden_subsamples = remaining_golden_batches
-            remaining_input_batches = None
-            remaining_golden_batches = None
-        else:
-            next_input = next(input_loader_iter, None)
-            if next_input is None:
-                return IterationResult(False, 0, None, None)
+        next_input = next(input_loader_iter, None).to(self.device).squeeze(0).permute(1, 0, 2)
+        if next_input is None:
+            return IterationResult(False, 0, None)
 
-            input_subsamples = torch.stack([t[0].squeeze(0).squeeze(0).to(self.device) for t in next_input[0]])
-            golden_subsamples = torch.stack([t[0].squeeze(0).squeeze(0).to(self.device) for t in next_input[1]])
+        input_subsamples = next_input.squeeze(0)[0]
+        golden_subsamples = next_input.squeeze(0)[1]
 
-            del next_input
-            files_processed += 1
+        del next_input
 
-        while input_subsamples.size()[0] < self.batches_per_iteration:
-            next_input = next(input_loader_iter, None)
-            if next_input is None:
-                # Discard remainder.
-                return IterationResult(False, 0, None, None)
-
-            next_input_subsamples = torch.stack([t[0].squeeze(0).squeeze(0).to(self.device) for t in next_input[0]])
-            next_golden_subsamples = torch.stack([t[0].squeeze(0).squeeze(0).to(self.device) for t in next_input[1]])
-
-            input_subsamples = torch.cat((input_subsamples, next_input_subsamples), dim=0)
-            golden_subsamples = torch.cat((golden_subsamples, next_golden_subsamples), dim=0)
-
-            del next_input
-            files_processed += 1
-
-        if input_subsamples.size()[0] > self.batches_per_iteration:
-            remaining_input_batches = input_subsamples[self.batches_per_iteration:]
-            remaining_golden_batches = golden_subsamples[self.batches_per_iteration:]
-
-            input_subsamples = input_subsamples[:self.batches_per_iteration]
-            golden_subsamples = golden_subsamples[:self.batches_per_iteration]
-
-        golden_reconstructed = self.reconstruct_overlapping_samples_nofade(golden_subsamples)
+        golden_reconstructed = self.reconstruct_overlapping_samples_fade(golden_subsamples)
 
         perf_data_prep_end = time.perf_counter()
         self.summary_writer.add_scalar(
@@ -190,7 +162,7 @@ class AudioTrainer:
                 f"perf_model_train_prediction_{model_name}",
                 perf_model_train_prediction_end - perf_model_train_prediction_start, self.iteration_count)
 
-            prediction = self.reconstruct_overlapping_samples(prediction_raw)
+            prediction = self.reconstruct_overlapping_samples_nofade(prediction_raw)
 
             if should_record_audio_clips:
                 prediction_cpu = prediction.cpu().detach()
@@ -259,14 +231,13 @@ class AudioTrainer:
                 else:
                     print("prediction_cpu is None!")
 
+        self.samples_processed += self.batches_per_iteration * self.samples_per_iteration
+
         return IterationResult(
             continue_training=True,
-            files_processed_during_iteration=files_processed,
-            remaining_input_batches=remaining_input_batches,
-            remaining_golden_batches=remaining_golden_batches,
         )
 
-    def reconstruct_overlapping_samples(self, samples: torch.Tensor):
+    def reconstruct_overlapping_samples_fade(self, samples: torch.Tensor):
         num_batches = samples.size()[0]
         non_overlapping_size = self.samples_per_batch - self.overlap_samples * 2
 
@@ -289,6 +260,7 @@ class AudioTrainer:
 
         return output.unsqueeze(dim=0).unsqueeze(dim=0)
 
+
     def reconstruct_overlapping_samples_nofade(self, samples: torch.Tensor):
         num_batches = samples.size()[0]
         non_overlapping_size = self.samples_per_batch - self.overlap_samples * 2
@@ -309,11 +281,23 @@ class AudioTrainer:
         return output.unsqueeze(dim=0).unsqueeze(dim=0)
 
 
+    def reconstruct_overlapping_samples_nofade_wrong_alignment(self, samples: torch.Tensor):
+        num_batches = samples.size()[0]
+        step_size = self.samples_per_batch + self.overlap_samples
+
+        total_length = num_batches * step_size + self.overlap_samples
+        output = torch.zeros(total_length, dtype=samples.dtype, device=samples.device)
+
+        for idx, batch in enumerate(samples):
+            start = idx * step_size
+            end = start + self.samples_per_batch
+            output[start:end] = batch
+
+        return output.unsqueeze(dim=0).unsqueeze(dim=0)
+
+
 
 @dataclass
-class IterationResult():
+class IterationResult:
     # pylint: disable=missing-class-docstring
     continue_training: bool
-    files_processed_during_iteration: int
-    remaining_input_batches: Optional[torch.Tensor]
-    remaining_golden_batches: Optional[torch.Tensor]
