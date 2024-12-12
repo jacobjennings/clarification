@@ -64,7 +64,7 @@ class AudioTrainer:
         self.epoch_count = 0
         self.samples_processed = 0
         self.train_start_time = None
-        self.log_per_iterations = 15
+        self.log_per_iterations = 25
 
     def train(self):
         self.train_start_time = time.time()
@@ -132,7 +132,7 @@ class AudioTrainer:
 
         next_input = next(input_loader_iter, None).to(self.device).squeeze(0).permute(1, 0, 2)
         if next_input is None:
-            return IterationResult(False, 0, None)
+            return IterationResult(False)
 
         input_subsamples = next_input.squeeze(0)[0]
         golden_subsamples = next_input.squeeze(0)[1]

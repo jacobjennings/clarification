@@ -22,13 +22,13 @@ def train():
 
     models_dir = "."
     if mac:
-        base_dataset_directory = '/Users/jacobjennings/noisy-commonvoice-24k-300ms-10ms-h5py/en'
+        base_dataset_directory = '/Users/jacobjennings/noisy-commonvoice-24k-300ms-10ms-opus/en'
         models_dir = '/Users/jacobjennings/denoise-models/2'
     elif is_cloud:
-        base_dataset_directory = '/workspace/noisy-commonvoice-24k-300ms-10ms-h5py/en'
+        base_dataset_directory = '/workspace/noisy-commonvoice-24k-300ms-10ms-opus/en'
         models_dir = '/workspace/weights'
     else:
-        base_dataset_directory = '/workspace/noisy-commonvoice-24k-300ms-10ms-h5py/en'
+        base_dataset_directory = '/workspace/noisy-commonvoice-24k-300ms-10ms-opus/en'
         models_dir = '/workspace/weights'
 
     pathlib.Path(models_dir).mkdir(parents=True, exist_ok=True)
@@ -83,7 +83,7 @@ def train():
         ("SISDRLoss", 1.5, auraloss.time.SISDRLoss()),
         ("MelSTFTLoss", 0.5, auraloss.freq.MelSTFTLoss(sample_rate=sample_rate, n_mels=128, device=device)),
     ]
-    batches_per_iteration = 70
+    batches_per_iteration = 72
 
     loader = clarification.datas.commonvoice_loader.CommonVoiceLoader(
         base_dir=base_dataset_directory,
@@ -103,7 +103,7 @@ def train():
         loss_function_tuples=loss_functions,
         sample_rate=sample_rate,
         samples_per_batch=samples_per_batch,
-        batches_per_iteration=70,
+        batches_per_iteration=batches_per_iteration,
         device=device,
         overlap_samples=overlap_samples,
         model_weights_dir=models_dir,

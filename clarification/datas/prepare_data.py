@@ -49,7 +49,7 @@ from torch.utils.tensorboard import SummaryWriter
 base_dataset_directory = '/home/jacob/cv-corpus-17.0-2024-03-15/en'
 
 # Uncomment these. Safety measure to avoid accidental use.
-out_dataset_directory = '/workspace/noisy-commonvoice-24k-300ms-10ms-h5py-opus/en'
+out_dataset_directory = '/workspace/noisy-commonvoice-24k-300ms-10ms-opus2/en'
 
 num_processed = Value("l", 0)
 
@@ -136,34 +136,32 @@ def process_file(data):
     clips_dir = f"{out_dataset_directory}/{megachunk_idx}/clips"
     pathlib.Path(clips_dir).mkdir(parents=True, exist_ok=True)
 
-    with open(f"{out_dataset_directory}/{megachunk_idx}/info.csv", 'a', newline='\n') as csvfile:
-        for idx, (noisy_batch, clear_batch) in enumerate(zip(noisy_batches, clear_batches)):
-            relative_path = f"{batch_idx}_{idx}.opus"
+    write_dicts = []
+    for idx, (noisy_batch, clear_batch) in enumerate(zip(noisy_batches, clear_batches)):
+        relative_path = f"{megachunk_idx}/clips/{batch_idx}_{idx}.opus"
 
-            path_absolute = f"{out_dataset_directory}/{megachunk_idx}/clips/{batch_idx}_{idx}.opus"
+        path_absolute = f"{out_dataset_directory}/{megachunk_idx}/clips/{batch_idx}_{idx}.opus"
 
-            noisy_full = noisy_batch.reshape(-1)
-            clear_full = clear_batch.reshape(-1)
+        noisy_full = noisy_batch.reshape(-1)
+        clear_full = clear_batch.reshape(-1)
 
-            two_channels = torch.stack([noisy_full, clear_full], dim=0).permute(1, 0).to("cpu")
+        two_channels = torch.stack([noisy_full, clear_full], dim=0).permute(1, 0).to("cpu")
 
-            torchaudio.save(
-                uri=path_absolute,
-                src=two_channels,
-                sample_rate=resample_rate,
-                format="opus",
-                channels_first=False,
-            )
+        print(f"two_channels: {two_channels.size()}")
 
-            fieldnames = ['path', 'sentence_id']
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        torchaudio.save(
+            uri=path_absolute,
+            src=two_channels,
+            sample_rate=resample_rate,
+            format="opus",
+            channels_first=False,
+        )
 
-            writer.writerow({
-                "path": relative_path,
-                "sentence_id": data[2]["sentence_id"]
-            })
+        write_dicts.append({
+            "path": relative_path,
+        })
 
-    return 0
+    return write_dicts
 
 
 class ChunkIterable:
@@ -231,29 +229,32 @@ def process_data():
 
     process_count = 32
 
-    num_megachunks = 0
+    chunk_iter = ChunkIterable(megachunk_size, data_loader_len)
 
     with open(f"{out_dataset_directory}/info.csv", 'w', newline='\n') as csvfile:
-        fieldnames = ['num_megachunks', 'sample_rate', 'sample_size', 'overlap_size', 'consumption_batch_size']
+        fieldnames = ['sample_rate', 'sample_size', 'overlap_size', 'consumption_batch_size']
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerow({
-            "num_megachunks": num_megachunks,
             "sample_rate": resample_rate,
             "sample_size": sample_size,
             "overlap_size": overlap_size,
             "consumption_batch_size": consumption_batch_size
         })
 
-    chunk_iter = ChunkIterable(megachunk_size, data_loader_len)
-
     enumerated_batched_iter = EnumeratedIter(itertools.batched(data_loader, 32))
     zipped_dataset = zip(
         enumerated_batched_iter, chunk_iter, itertools.repeat((data_loader_len, t0, sample_size, overlap_size, resample_rate)))
 
-    with Pool(processes=process_count) as pool:
-        for i in pool.imap_unordered(process_file, zipped_dataset, chunksize=8):
-            pass
+    write_path = f"{out_dataset_directory}/samples.csv"
+    with open(write_path, 'w', newline='\n') as csvfile:
+        fieldnames = ['path']
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+
+        with Pool(processes=process_count) as pool:
+            for write_dicts in pool.imap_unordered(process_file, zipped_dataset, chunksize=8):
+                for write_dict in write_dicts:
+                    writer.writerow(write_dict)
 
 if __name__ == '__main__':
     process_data()

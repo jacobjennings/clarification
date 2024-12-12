@@ -11,7 +11,7 @@ from torch.utils.tensorboard import SummaryWriter
 from . import noisy_dataset
 
 
-class CommonVoiceLoader():
+class CommonVoiceLoader:
     """Utility for loading mozilla common voice noisy / clear datasets."""
 
     def __init__(self,

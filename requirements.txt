@@ -14,4 +14,3 @@ typing-extensions
 torch-tb-profiler
 autopep8
 auraloss
-h5py
