@@ -60,8 +60,10 @@ class AudioTrainer:
         self.iteration_count = 0
         self.epoch_start_time = None
         self.files_processed = 0
+        self.train_start_time = None
 
     def train(self):
+        self.train_start_time = time.time()
         files_processed = 0
 
         gc.collect()
@@ -71,11 +73,11 @@ class AudioTrainer:
         self.iteration_count = 0
 
         while True:
-            self.files_processed = self.train_epoch(files_processed=files_processed)
+            self.train_epoch()
             epoch_count += 1
             self.summary_writer.add_scalar("epoch", epoch_count)
 
-    def train_epoch(self, files_processed: int):
+    def train_epoch(self):
         self.epoch_start_time = time.time()
 
         input_loader_iter = iter(self.input_dataset_loader)
@@ -93,12 +95,12 @@ class AudioTrainer:
                 should_record_audio_clips=send_audio_clips
             )
             continue_training = result.continue_training
-            files_processed += result.files_processed_during_iteration
+            self.files_processed += result.files_processed_during_iteration
             remaining_input_batches = result.remaining_input_batches
             remaining_golden_batches = result.remaining_golden_batches
-            self.summary_writer.add_scalar("files_processed", files_processed, self.iteration_count)
+            self.summary_writer.add_scalar("files_processed", self.files_processed, self.iteration_count)
             self.summary_writer.add_scalar("files_processed_per_second",
-                                           files_processed / (time.time() - self.epoch_start_time),
+                                           self.files_processed / (time.time() - self.train_start_time),
                                            self.iteration_count)
 
             if (self.iteration_count % self.model_weights_save_every_iterations == 0
@@ -112,8 +114,6 @@ class AudioTrainer:
             self.summary_writer.flush()
 
             self.iteration_count += 1
-
-        return files_processed
 
     def train_iteration(
             self,

@@ -1,7 +1,7 @@
 cd /workspace
 
 apt install zip zstd vim -y
-mkdir model-weights
+mkdir weights
 unzip clarification.zip
 unzip noisy-commonvoice-24k-300ms-10ms.zip
 

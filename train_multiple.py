@@ -1,7 +1,6 @@
 """Training binary."""
-import os
 import platform
-import argparse
+import getpass
 
 import torch
 import torch.nn as nn
@@ -18,10 +17,15 @@ def train():
     mac = platform.system() == "Darwin"
     device = "mps" if mac else "cuda"
 
+    is_cloud = getpass.getuser() == "root"
+
     models_dir = "."
     if mac:
         base_dataset_directory = '/Users/jacobjennings/noisy-commonvoice-24k-300ms-10ms/en/clear'
         models_dir = '/Users/jacobjennings/denoise-models/2'
+    elif is_cloud:
+        base_dataset_directory = '/workspace/noisy-commonvoice-24k-300ms-10ms/en'
+        models_dir = '/workspace/weights'
     else:
         base_dataset_directory = '/home/jacob/noisy-commonvoice-24k-300ms-10ms/en'
         models_dir = '/home/jacob/denoise-models/2'
@@ -49,7 +53,7 @@ def train():
             device=device, dtype=dtype))
         simple_optimizer = torch.optim.SGD(params=simple_model.parameters(), lr=0.01)
         simple_scheduler = torch.optim.lr_scheduler.LinearLR(
-            simple_optimizer, start_factor=0.02, end_factor=0.006, total_iters=6000)
+            simple_optimizer, start_factor=0.02, end_factor=0.006, total_iters=10000)
 
         return name, simple_model, simple_optimizer, simple_scheduler
 
@@ -72,7 +76,7 @@ def train():
     # model.eval()
 
     loss_functions = [
-        ("L1Loss", 3.0, nn.L1Loss()),
+        ("L1Loss", 2.0, nn.L1Loss()),
         ("SISDRLoss", 1.5, auraloss.time.SISDRLoss()),
         ("MelSTFTLoss", 0.5, auraloss.freq.MelSTFTLoss(sample_rate=sample_rate, n_mels=128, device=device)),
     ]
