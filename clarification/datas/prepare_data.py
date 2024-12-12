@@ -49,16 +49,32 @@ from torch.utils.tensorboard import SummaryWriter
 base_dataset_directory = '/home/jacob/cv-corpus-17.0-2024-03-15/en'
 
 # Uncomment these. Safety measure to avoid accidental use.
-out_dataset_directory = '/workspace/noisy-commonvoice-24k-300ms-10ms-h5py/en'
+out_dataset_directory = '/workspace/noisy-commonvoice-24k-300ms-10ms-h5py-opus/en'
 
 num_processed = Value("l", 0)
 
 sample_ms = 300
 overlap_ms = 10
 
-megachunk_size = 10000
+megachunk_size = 1000
+
+consumption_batch_size = 8
 
 resample_lock = threading.Lock()
+
+def discard_remainder(tensors, split_size):
+    if tensors[-1].size(0) != split_size:
+        tensors = tensors[:-1]
+    return tensors
+
+def better_split_discard_remainder(tensor, split_size):
+    splits = torch.split(tensor, split_size)
+
+    # Check the size of the last group and discard if necessary
+    if splits[-1].size(0) != split_size:
+        splits = splits[:-1]
+
+    return splits
 
 class AddGaussianNoise(object):
     def __init__(self, mean=0., std=1.):
@@ -80,10 +96,11 @@ def overlapping_samples(audio, sample_size, overlap_size):
 def process_file(data):
     add_noise = AddGaussianNoise(std=0.1)
 
-    data_batch, megachunk_idx, (data_loader_len, t0, sample_size, overlap_size, resample_rate) = data
+    (data_batch, batch_idx), megachunk_idx, (data_loader_len, t0, sample_size, overlap_size, resample_rate) = data
 
-    resampled_clear_chunks_aggregate = None
-    noisy_chunks_aggregate = None
+    resampled_clear_subsamples_aggregate = None
+    noisy_subsamples_aggregate = None
+
     for data in data_batch:
         if num_processed.value % 500 == 0 and num_processed.value != 0:
             t1 = time.time()
@@ -97,24 +114,56 @@ def process_file(data):
                 f"Remaining estimated hours: {(data_loader_len - num_processed.value) / files_per_second / 60 / 60:.2f}")
 
         num_processed.value += 1
+
         original_waveform = data[0].squeeze()
         sample_rate = data[1][0].item()
         resampler = TAT.Resample(sample_rate, resample_rate, dtype=torch.float32).to("cuda")
         # with resample_lock:
         resampled_clear = resampler(original_waveform.to("cuda"))
         noisy_waveform = add_noise(resampled_clear)
-        resampled_clear_chunks = overlapping_samples(resampled_clear, sample_size=sample_size, overlap_size=overlap_size)
-        noisy_chunks = overlapping_samples(noisy_waveform, sample_size=sample_size, overlap_size=overlap_size)
-        if resampled_clear_chunks_aggregate is not None:
-            resampled_clear_chunks_aggregate = torch.cat([resampled_clear_chunks_aggregate, resampled_clear_chunks], dim=0)
-            noisy_chunks_aggregate = torch.cat([noisy_chunks_aggregate, noisy_chunks], dim=0)
+        resampled_clear_subsamples = overlapping_samples(resampled_clear, sample_size=sample_size, overlap_size=overlap_size)
+        noisy_subsamples = overlapping_samples(noisy_waveform, sample_size=sample_size, overlap_size=overlap_size)
+        if resampled_clear_subsamples_aggregate is not None:
+            resampled_clear_subsamples_aggregate = torch.cat([resampled_clear_subsamples_aggregate, resampled_clear_subsamples], dim=0)
+            noisy_subsamples_aggregate = torch.cat([noisy_subsamples_aggregate, noisy_subsamples], dim=0)
         else:
-            resampled_clear_chunks_aggregate = resampled_clear_chunks
-            noisy_chunks_aggregate = noisy_chunks
+            resampled_clear_subsamples_aggregate = resampled_clear_subsamples
+            noisy_subsamples_aggregate = noisy_subsamples
 
-    pairs = torch.stack([noisy_chunks_aggregate, resampled_clear_chunks_aggregate], dim=1).to("cpu")
+    noisy_batches = better_split_discard_remainder(noisy_subsamples_aggregate, consumption_batch_size)
+    clear_batches = better_split_discard_remainder(resampled_clear_subsamples_aggregate, consumption_batch_size)
 
-    return pairs
+    clips_dir = f"{out_dataset_directory}/{megachunk_idx}/clips"
+    pathlib.Path(clips_dir).mkdir(parents=True, exist_ok=True)
+
+    with open(f"{out_dataset_directory}/{megachunk_idx}/info.csv", 'a', newline='\n') as csvfile:
+        for idx, (noisy_batch, clear_batch) in enumerate(zip(noisy_batches, clear_batches)):
+            relative_path = f"{batch_idx}_{idx}.opus"
+
+            path_absolute = f"{out_dataset_directory}/{megachunk_idx}/clips/{batch_idx}_{idx}.opus"
+
+            noisy_full = noisy_batch.reshape(-1)
+            clear_full = clear_batch.reshape(-1)
+
+            two_channels = torch.stack([noisy_full, clear_full], dim=0).permute(1, 0).to("cpu")
+
+            torchaudio.save(
+                uri=path_absolute,
+                src=two_channels,
+                sample_rate=resample_rate,
+                format="opus",
+                channels_first=False,
+            )
+
+            fieldnames = ['path', 'sentence_id']
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+
+            writer.writerow({
+                "path": relative_path,
+                "sentence_id": data[2]["sentence_id"]
+            })
+
+    return 0
 
 
 class ChunkIterable:
@@ -139,6 +188,18 @@ class ChunkIterable:
 
         return chunk_count
 
+class EnumeratedIter:
+    def __init__(self, it):
+        self.it = it
+        self.index = 0
+
+    def __next__(self):
+        retval = (next(self.it), self.index)
+        self.index += 1
+        return retval
+
+    def __iter__(self):
+        return self
 
 def process_data():
     resample_rate = 24000
@@ -161,6 +222,7 @@ def process_data():
 
     print(torchaudio.utils.ffmpeg_utils.get_audio_encoders())
     print(torchaudio.list_audio_backends)
+
     print(f"Detected {os.cpu_count()} cpus.")
 
     data_loader_len = len(data_loader)
@@ -171,32 +233,27 @@ def process_data():
 
     num_megachunks = 0
 
-    outfile = h5py.File(f"{out_dataset_directory}/clarification-dataset.hdf5", 'w')
-    outfile_dataset = outfile.create_dataset(
-        "noisy_clear_samples_300ms_10ms_overlap",
-        shape=(20000000, 2, sample_size), #  20000000
-        maxshape=(None, 2, sample_size),
-        chunks=(5, 2, sample_size),
-        dtype=numpy.float32
-    )
+    with open(f"{out_dataset_directory}/info.csv", 'w', newline='\n') as csvfile:
+        fieldnames = ['num_megachunks', 'sample_rate', 'sample_size', 'overlap_size', 'consumption_batch_size']
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerow({
+            "num_megachunks": num_megachunks,
+            "sample_rate": resample_rate,
+            "sample_size": sample_size,
+            "overlap_size": overlap_size,
+            "consumption_batch_size": consumption_batch_size
+        })
 
     chunk_iter = ChunkIterable(megachunk_size, data_loader_len)
-    zipped_dataset = zip(
-        itertools.batched(data_loader, 16), chunk_iter, itertools.repeat((data_loader_len, t0, sample_size, overlap_size, resample_rate)))
 
-    write_index = 0
+    enumerated_batched_iter = EnumeratedIter(itertools.batched(data_loader, 32))
+    zipped_dataset = zip(
+        enumerated_batched_iter, chunk_iter, itertools.repeat((data_loader_len, t0, sample_size, overlap_size, resample_rate)))
 
     with Pool(processes=process_count) as pool:
-        for pairs in pool.imap_unordered(process_file, zipped_dataset, chunksize=8):
-            outfile_size = outfile_dataset.shape[0]
-            pair_size = pairs.shape[0]
-
-            if write_index + pair_size > outfile_size:
-                outfile_dataset.resize(outfile_size + pair_size, axis=0)
-
-            outfile_dataset[write_index:write_index + pair_size] = pairs
-            write_index += pair_size
-
+        for i in pool.imap_unordered(process_file, zipped_dataset, chunksize=8):
+            pass
 
 if __name__ == '__main__':
     process_data()

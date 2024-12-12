@@ -64,6 +64,7 @@ class AudioTrainer:
         self.epoch_count = 0
         self.samples_processed = 0
         self.train_start_time = None
+        self.log_per_iterations = 15
 
     def train(self):
         self.train_start_time = time.time()
@@ -125,7 +126,9 @@ class AudioTrainer:
             input_loader_iter,
             should_record_audio_clips: bool):
 
-        perf_iteration_start = time.perf_counter()
+        should_log_extra_stuff = self.iteration_count % self.log_per_iterations == 0
+        if should_log_extra_stuff:
+            perf_iteration_start = time.perf_counter()
 
         next_input = next(input_loader_iter, None).to(self.device).squeeze(0).permute(1, 0, 2)
         if next_input is None:
@@ -138,9 +141,10 @@ class AudioTrainer:
 
         golden_reconstructed = self.reconstruct_overlapping_samples_fade(golden_subsamples)
 
-        perf_data_prep_end = time.perf_counter()
-        self.summary_writer.add_scalar(
-            "perf_data_prep", perf_data_prep_end - perf_iteration_start, self.iteration_count)
+        if should_log_extra_stuff:
+            perf_data_prep_end = time.perf_counter()
+            self.summary_writer.add_scalar(
+                "perf_data_prep", perf_data_prep_end - perf_iteration_start, self.iteration_count)
 
         if should_record_audio_clips:
             noisy_audio = self.reconstruct_overlapping_samples_nofade(input_subsamples).cpu().detach()
@@ -154,13 +158,17 @@ class AudioTrainer:
         for model_idx, (model_name, model, optimizer, scheduler) in enumerate(self.models):
             model.train()
 
-            perf_model_train_prediction_start = time.perf_counter()
-            prediction_raw = model(input_subsamples.unsqueeze(dim=1)).squeeze(dim=1)
-            perf_model_train_prediction_end = time.perf_counter()
+            if should_log_extra_stuff:
+                perf_model_train_prediction_start = time.perf_counter()
 
-            self.summary_writer.add_scalar(
-                f"perf_model_train_prediction_{model_name}",
-                perf_model_train_prediction_end - perf_model_train_prediction_start, self.iteration_count)
+            prediction_raw = model(input_subsamples.unsqueeze(dim=1)).squeeze(dim=1)
+
+            if should_log_extra_stuff:
+                perf_model_train_prediction_end = time.perf_counter()
+
+                self.summary_writer.add_scalar(
+                    f"perf_model_train_prediction_{model_name}",
+                    perf_model_train_prediction_end - perf_model_train_prediction_start, self.iteration_count)
 
             prediction = self.reconstruct_overlapping_samples_nofade(prediction_raw)
 
@@ -173,9 +181,10 @@ class AudioTrainer:
                 loss_out = loss_fn(prediction, golden_reconstructed)
                 loss_out_weighted = loss_out * loss_weight
 
-                self.summary_writer.add_scalar(f"{loss_name}_{model_name}_weighted",
-                                               loss_out_weighted.item(), self.iteration_count)
-                self.summary_writer.add_scalar(f"{loss_name}_{model_name}", loss_out.item(), self.iteration_count)
+                if should_log_extra_stuff:
+                    self.summary_writer.add_scalar(f"{loss_name}_{model_name}_weighted",
+                                                   loss_out_weighted.item(), self.iteration_count)
+                    self.summary_writer.add_scalar(f"{loss_name}_{model_name}", loss_out.item(), self.iteration_count)
 
                 if loss:
                     loss = loss + loss_out_weighted
@@ -183,10 +192,13 @@ class AudioTrainer:
                     loss = loss_out_weighted
 
                 perf_loss_end = time.perf_counter()
-                self.summary_writer.add_scalar(
-                    f"perf_loss_{loss_name}_{model_name}", perf_loss_end - perf_loss_start, self.iteration_count)
 
-            self.summary_writer.add_scalar(f"total_loss_model_{model_name}", loss.item(), self.iteration_count)
+                if should_log_extra_stuff:
+                    self.summary_writer.add_scalar(
+                        f"perf_loss_{loss_name}_{model_name}", perf_loss_end - perf_loss_start, self.iteration_count)
+
+            if should_log_extra_stuff:
+                self.summary_writer.add_scalar(f"total_loss_model_{model_name}", loss.item(), self.iteration_count)
 
             del prediction
 
@@ -195,25 +207,28 @@ class AudioTrainer:
             perf_loss_backward_start = time.perf_counter()
             loss.backward()
             perf_loss_backward_end = time.perf_counter()
-            self.summary_writer.add_scalar(
-                f"perf_loss_backward_{model_name}",
-                perf_loss_backward_end - perf_loss_backward_start, self.iteration_count)
 
-            self.summary_writer.add_scalar(f"memory_post_backprop_allocated_model_{model_name}",
-                                           torch.cuda.memory_allocated(0), self.iteration_count)
-            self.summary_writer.add_scalar(f"memory_post_backprop_reserved_model_{model_name}",
-                                           torch.cuda.memory_reserved(0), self.iteration_count)
-            self.summary_writer.add_scalar(f"memory_post_backprop_max_reserved_model_{model_name}",
-                                           torch.cuda.max_memory_reserved(0), self.iteration_count)
+            if should_log_extra_stuff:
+                self.summary_writer.add_scalar(
+                    f"perf_loss_backward_{model_name}",
+                    perf_loss_backward_end - perf_loss_backward_start, self.iteration_count)
+                self.summary_writer.add_scalar(f"memory_post_backprop_allocated_model_{model_name}",
+                                               torch.cuda.memory_allocated(0), self.iteration_count)
+                self.summary_writer.add_scalar(f"memory_post_backprop_reserved_model_{model_name}",
+                                               torch.cuda.memory_reserved(0), self.iteration_count)
+                self.summary_writer.add_scalar(f"memory_post_backprop_max_reserved_model_{model_name}",
+                                               torch.cuda.max_memory_reserved(0), self.iteration_count)
 
             del loss
 
             perf_optimizer_step_start = time.perf_counter()
             optimizer.step()
             perf_optimizer_step_end = time.perf_counter()
-            self.summary_writer.add_scalar(
-                f"perf_optimizer_step_{model_name}",
-                perf_optimizer_step_end - perf_optimizer_step_start, self.iteration_count)
+
+            if should_log_extra_stuff:
+                self.summary_writer.add_scalar(
+                    f"perf_optimizer_step_{model_name}",
+                    perf_optimizer_step_end - perf_optimizer_step_start, self.iteration_count)
 
             if scheduler:
                 scheduler.step()
@@ -221,8 +236,6 @@ class AudioTrainer:
             perf_eval_start = time.perf_counter()
             model.eval()
             perf_eval_end = time.perf_counter()
-            self.summary_writer.add_scalar(
-                f"perf_eval_{model_name}", perf_eval_end - perf_eval_start, self.iteration_count)
 
             if should_record_audio_clips:
                 if prediction_cpu is not None:
