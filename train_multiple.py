@@ -62,12 +62,14 @@ def train():
 
     models = [
         # simple_maker("simple1", [64, 128, 256, 512, 1024]),
-        simple_maker("simple2", [200, 300, 400, 900]),
+        # simple_maker("simple2", [200, 300, 400, 900]), # Way underperformed 6 and 7. Clipping a lot.
         # simple_maker("simple3", [100, 300, 500, 900]),
         # simple_maker("simple4", [100, 500, 900]),
         # simple_maker("simple5", [10, 20, 40, 80, 160, 400, 550, 700]),
-        simple_maker("simple6", [100, 150, 200, 900]),
+        # simple_maker("simple6", [100, 150, 200, 900]), # loss: -9, sounded not as good as simple7.
         simple_maker("simple7", [300, 500, 900]),
+        simple_maker("simple8", [400, 500, 600]),
+        simple_maker("simple9", [300, 500, 700]),
     ]
 
     for model_tuple in models:
