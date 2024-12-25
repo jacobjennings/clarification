@@ -10,9 +10,10 @@ import concurrent.futures
 import multiprocessing
 import itertools
 import csv
-import pathlib
+import sys
+csv.field_size_limit(sys.maxsize)
 
-import h5py
+import pathlib
 
 from ipywidgets import IntProgress
 from IPython.display import display
@@ -46,19 +47,22 @@ import numpy as np
 # PyTorch TensorBoard support
 from torch.utils.tensorboard import SummaryWriter
 
-base_dataset_directory = '/home/jacob/cv-corpus-17.0-2024-03-15/en'
+base_dataset_directory = '/workspace/cv-20/cv-corpus-20.0-2024-12-06'
 
 # Uncomment these. Safety measure to avoid accidental use.
-out_dataset_directory = '/workspace/noisy-commonvoice-24k-300ms-10ms-opus2/en'
+train_out_dataset_directory = '/workspace/noisy-commonvoice-24k-300ms-5ms-opus/train'
+test_out_dataset_directory = '/workspace/noisy-commonvoice-24k-300ms-5ms-opus/test'
 
 num_processed = Value("l", 0)
 
 sample_ms = 300
-overlap_ms = 10
+overlap_ms = 5
 
 megachunk_size = 1000
 
-consumption_batch_size = 8
+consumption_batch_size = 16
+process_batch_size = 96
+process_count = 16
 
 resample_lock = threading.Lock()
 
@@ -96,7 +100,9 @@ def overlapping_samples(audio, sample_size, overlap_size):
 def process_file(data):
     add_noise = AddGaussianNoise(std=0.1)
 
-    (data_batch, batch_idx), megachunk_idx, (data_loader_len, t0, sample_size, overlap_size, resample_rate) = data
+    (data_batch, batch_idx), megachunk_idx, (data_loader_len, t0, sample_size, overlap_size, resample_rate, out_dataset_directory) = data
+    
+    # print(f"batch_idx: {batch_idx}, megachunk_idx: {megachunk_idx}")
 
     resampled_clear_subsamples_aggregate = None
     noisy_subsamples_aggregate = None
@@ -117,10 +123,14 @@ def process_file(data):
 
         original_waveform = data[0].squeeze()
         sample_rate = data[1][0].item()
+        # locale = data[2]["locale"]
         resampler = TAT.Resample(sample_rate, resample_rate, dtype=torch.float32).to("cuda")
         # with resample_lock:
         resampled_clear = resampler(original_waveform.to("cuda"))
         noisy_waveform = add_noise(resampled_clear)
+        if resampled_clear.size()[0] < sample_size:
+            continue
+        # print(f"resampled_clear: {resampled_clear.size()}, noisy_waveform: {noisy_waveform.size()}")
         resampled_clear_subsamples = overlapping_samples(resampled_clear, sample_size=sample_size, overlap_size=overlap_size)
         noisy_subsamples = overlapping_samples(noisy_waveform, sample_size=sample_size, overlap_size=overlap_size)
         if resampled_clear_subsamples_aggregate is not None:
@@ -132,6 +142,8 @@ def process_file(data):
 
     noisy_batches = better_split_discard_remainder(noisy_subsamples_aggregate, consumption_batch_size)
     clear_batches = better_split_discard_remainder(resampled_clear_subsamples_aggregate, consumption_batch_size)
+    
+    # print(f"len(noisy_batches): {len(noisy_batches)}, len(clear_batches): {len(clear_batches)}, resampled_clear_subsamples_aggregate: {resampled_clear_subsamples_aggregate.size()}, noisy_subsamples_aggregate: {noisy_subsamples_aggregate.size()}")
 
     clips_dir = f"{out_dataset_directory}/{megachunk_idx}/clips"
     pathlib.Path(clips_dir).mkdir(parents=True, exist_ok=True)
@@ -141,13 +153,15 @@ def process_file(data):
         relative_path = f"{megachunk_idx}/clips/{batch_idx}_{idx}.opus"
 
         path_absolute = f"{out_dataset_directory}/{megachunk_idx}/clips/{batch_idx}_{idx}.opus"
+        
+        # print(f"noisy_batch: {noisy_batch.size()}, clear_batch: {clear_batch.size()}")
 
         noisy_full = noisy_batch.reshape(-1)
         clear_full = clear_batch.reshape(-1)
 
         two_channels = torch.stack([noisy_full, clear_full], dim=0).permute(1, 0).to("cpu")
 
-        print(f"two_channels: {two_channels.size()}")
+        # print(f"two_channels: {two_channels.size()}")
 
         torchaudio.save(
             uri=path_absolute,
@@ -206,15 +220,35 @@ def process_data():
 
     print(torch.__version__)
     print(torchaudio.__version__)
+    
+    localization_subdirectories = [f.name for f in os.scandir(base_dataset_directory) if f.is_dir()]
 
-    pathlib.Path(out_dataset_directory).mkdir(parents=True, exist_ok=True)
+    pathlib.Path(train_out_dataset_directory).mkdir(parents=True, exist_ok=True)
+    pathlib.Path(test_out_dataset_directory).mkdir(parents=True, exist_ok=True)
 
-    training_speech_dataset = torchaudio.datasets.COMMONVOICE(root=base_dataset_directory)
+    train_datasets = []
+    test_datasets = []
+    for loc_dir in localization_subdirectories:
+        localized_input_base_dir = base_dataset_directory + "/" + loc_dir
+        
+        print(localized_input_base_dir)
 
-    training_speech_dataset_noisy = copy.deepcopy(training_speech_dataset)
+        train_dataset = torchaudio.datasets.COMMONVOICE(root=localized_input_base_dir)
+        train_datasets.append(train_dataset)
+        
+        test_dataset = torchaudio.datasets.COMMONVOICE(root=localized_input_base_dir, tsv="test.tsv")
+        test_datasets.append(test_dataset)
+        
+    train_chained_dataset = torch.utils.data.ConcatDataset(train_datasets)
+    test_chained_dataset = torch.utils.data.ConcatDataset(test_datasets)
+        
+    train_data_loader = DataLoader(
+        train_chained_dataset,
+        batch_size=1,
+        num_workers=16)
 
-    data_loader = DataLoader(
-        training_speech_dataset_noisy,
+    test_data_loader = DataLoader(
+        test_chained_dataset,
         batch_size=1,
         num_workers=16)
 
@@ -223,36 +257,57 @@ def process_data():
 
     print(f"Detected {os.cpu_count()} cpus.")
 
-    data_loader_len = len(data_loader)
+    train_data_loader_len = len(train_data_loader)
+    test_data_loader_len = len(test_data_loader)
+    
+    print(f"train_data_loader_len: {train_data_loader_len}")
+    print(f"test_data_loader_len: {test_data_loader_len}")
 
     t0 = time.time()
 
-    process_count = 32
+    train_chunk_iter = ChunkIterable(megachunk_size, train_data_loader_len)
+    test_chunk_iter = ChunkIterable(megachunk_size, test_data_loader_len)
 
-    chunk_iter = ChunkIterable(megachunk_size, data_loader_len)
+    def write_info_csv(directory):
+        with open(f"{directory}/info.csv", 'w', newline='\n') as csvfile:
+            fieldnames = ['sample_rate', 'sample_size', 'overlap_size', 'consumption_batch_size']
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerow({
+                "sample_rate": resample_rate,
+                "sample_size": sample_size,
+                "overlap_size": overlap_size,
+                "consumption_batch_size": consumption_batch_size
+            })
+            
+    write_info_csv(train_out_dataset_directory)
+    write_info_csv(test_out_dataset_directory)
 
-    with open(f"{out_dataset_directory}/info.csv", 'w', newline='\n') as csvfile:
-        fieldnames = ['sample_rate', 'sample_size', 'overlap_size', 'consumption_batch_size']
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerow({
-            "sample_rate": resample_rate,
-            "sample_size": sample_size,
-            "overlap_size": overlap_size,
-            "consumption_batch_size": consumption_batch_size
-        })
+    train_enumerated_batched_iter = EnumeratedIter(itertools.batched(train_data_loader, process_batch_size))
+    train_zipped_dataset = zip(
+        train_enumerated_batched_iter, train_chunk_iter, itertools.repeat((train_data_loader_len, t0, sample_size, overlap_size, resample_rate, train_out_dataset_directory)))
 
-    enumerated_batched_iter = EnumeratedIter(itertools.batched(data_loader, 32))
-    zipped_dataset = zip(
-        enumerated_batched_iter, chunk_iter, itertools.repeat((data_loader_len, t0, sample_size, overlap_size, resample_rate)))
+    test_enumerated_batched_iter = EnumeratedIter(itertools.batched(test_data_loader, process_batch_size))
+    test_zipped_dataset = zip(
+        test_enumerated_batched_iter, test_chunk_iter, itertools.repeat((test_data_loader_len, t0, sample_size, overlap_size, resample_rate, test_out_dataset_directory)))
 
-    write_path = f"{out_dataset_directory}/samples.csv"
+    write_path = f"{train_out_dataset_directory}/train.csv"
     with open(write_path, 'w', newline='\n') as csvfile:
         fieldnames = ['path']
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
         with Pool(processes=process_count) as pool:
-            for write_dicts in pool.imap_unordered(process_file, zipped_dataset, chunksize=8):
+            for write_dicts in pool.imap_unordered(process_file, train_zipped_dataset, chunksize=8):
+                for write_dict in write_dicts:
+                    writer.writerow(write_dict)
+
+    write_path = f"{test_out_dataset_directory}/test.csv"
+    with open(write_path, 'w', newline='\n') as csvfile:
+        fieldnames = ['path']
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+
+        with Pool(processes=process_count) as pool:
+            for write_dicts in pool.imap_unordered(process_file, test_zipped_dataset, chunksize=8):
                 for write_dict in write_dicts:
                     writer.writerow(write_dict)
 

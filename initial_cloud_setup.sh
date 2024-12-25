@@ -1,3 +1,5 @@
+#!/bin/bash +x
+
 cd /workspace
 
 apt install zip zstd vim -y

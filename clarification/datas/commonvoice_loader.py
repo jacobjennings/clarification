@@ -17,42 +17,55 @@ class CommonVoiceLoader:
     def __init__(self,
                  base_dir,
                  summary_writer,
-                 batch_size,
+                 dataset_batch_size,
+                 loader_batch_size,
                  should_pin_memory,
+                 num_workers,
                  device):
         self.base_dir = base_dir
         self.summary_writer = summary_writer
-        self.batch_size = batch_size
+        self.dataset_batch_size = dataset_batch_size
+        self.loader_batch_size = loader_batch_size
         self.should_pin_memory = should_pin_memory
+        self.num_workers = num_workers
         self.device = device
+        self.train_dataset = None
+        self.test_dataset = None
 
         self.train_loader = None
         self.test_loader = None
 
     def create_loaders(self):
         """Creates loaders"""
-        dataset = noisy_dataset.NoisyCommonsDataset(batch_size=self.batch_size, base_dir=self.base_dir)
-
-        split_generator = torch.Generator()
-        train, test = random_split(dataset, [0.9, 0.1], generator=split_generator)
+        self.train_dataset = noisy_dataset.NoisyCommonsDataset(
+            batch_size=self.dataset_batch_size, 
+            device=self.device, 
+            base_dir=self.base_dir,
+            csv_filename="train.csv")
+        
+        self.test_dataset = noisy_dataset.NoisyCommonsDataset(
+            batch_size=self.dataset_batch_size, 
+            device=self.device, 
+            base_dir=self.base_dir,
+            csv_filename="test.csv")
 
         loader_generator = torch.Generator()
-        self.summary_writer.add_text("CommonVoiceLoader", f"split_generator seed: {split_generator.initial_seed()}, "
-                                                          f"loader_generator seed: {loader_generator.initial_seed()}")
+
+        if self.summary_writer:
+            self.summary_writer.add_text("CommonVoiceLoader",
+                                         f"loader_generator seed: {loader_generator.initial_seed()}")
 
         train_loader = DataLoader(
-            train,
-            batch_size=1,
-            pin_memory=self.should_pin_memory,
-            pin_memory_device=self.device if self.should_pin_memory else "",
+            self.train_dataset,
+            batch_size=self.loader_batch_size,
             generator=loader_generator,
+            num_workers=self.num_workers
         )
 
         test_loader = DataLoader(
-            test,
-            batch_size=1,
-            pin_memory=self.should_pin_memory,
-            pin_memory_device=self.device if self.should_pin_memory else "",
+            self.test_dataset,
+            batch_size=self.loader_batch_size,
+            num_workers=self.num_workers
         )
 
         self.train_loader = train_loader

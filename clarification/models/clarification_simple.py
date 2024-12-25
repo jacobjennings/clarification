@@ -7,48 +7,68 @@ from ..modules import OutLayer, Down, ConvBlock1D, Up
 
 
 class ClarificationSimple(nn.Module):
-    def __init__(self, in_channels, samples_per_batch, device, dtype, layer_sizes=None):
+    def __init__(self, name, in_channels, device, dtype, layer_sizes=None, invert=False, num_output_convblocks=2):
         super(ClarificationSimple, self).__init__()
 
+        if len(layer_sizes) % 2 == 0:
+            raise ValueError("The number of layers must be odd.")
+
+        self.invert = invert
         if layer_sizes is None:
             layer_sizes = [64, 128, 256, 512, 1024]
 
-        self.first_layer = ConvBlock1D(in_channels=in_channels, out_channels=layer_sizes[0], device=device, dtype=dtype)
+        self.first_layer = ConvBlock1D(name=f"{name}_firstlayer_conv", in_channels=in_channels, out_channels=layer_sizes[0], device=device, dtype=dtype)
+        # print(f"First layer: in_channels: {in_channels} out_channels: {layer_sizes[0]}")
 
-        self.down_layers = [
-            Down(in_channels=layer_sizes[i], out_channels=layer_sizes[i + 1], device=device, dtype=dtype)
-            for i in range(len(layer_sizes) - 1)
-        ]
-        self.down_layers_module_list = nn.ModuleList(self.down_layers)
+        self.down_layers = nn.ModuleList()
+        for i in range(len(layer_sizes) // 2):
+            down = Down(name=f"{name}_down_{i}", in_channels=layer_sizes[i], out_channels=layer_sizes[i + 1], device=device, dtype=dtype)
+            # print(f"Down layer {i} in_channels: {layer_sizes[i]} out_channels: {layer_sizes[i + 1]}")
+            self.down_layers.add_module("down_" + str(i), down)
 
-        self.up_layers = []
-        for i in range(len(layer_sizes) - 2):
-            layer_depth = len(layer_sizes) - 2 - i
-            up = Up(in_channels=layer_sizes[-(i + 1)], out_channels=layer_sizes[-(i + 2)],
-                    layer_depth=layer_depth, samples_per_batch=samples_per_batch, device=device, dtype=dtype)
-            self.up_layers.append(up)
+        layer_sizes_len = len(layer_sizes)
+        self.up_layers = nn.ModuleList()
+        for i in range(layer_sizes_len // 2 - 1):
+            a_in_channels = layer_sizes[layer_sizes_len // 2 + i]
+            print(f"layer_sizes {layer_sizes}, layer_sizes_len // 2 + i + 1: {layer_sizes_len // 2 + i + 1}")
+            out_channels = layer_sizes[layer_sizes_len // 2 + i + 1]
+            up = Up(name=f"{name}_up_{i}",
+                    in_channels=a_in_channels,
+                    out_channels=out_channels,
+                    device=device, dtype=dtype,
+                    layer_num=i)
+            # print(f"Up layer {i} in_channels: {a_in_channels} out_channels: {out_channels}")
+            self.up_layers.add_module("up_" + str(i), up)
 
-        self.up_layers_module_list = nn.ModuleList(self.up_layers)
-
+        print(f"Out layer: in_channels: {layer_sizes[-1]} out_channels: 1")
         self.last_layer = OutLayer(
-            in_channels=layer_sizes[1],
-            out_channels=in_channels,
-            num_convblocks=2, device=device, dtype=dtype)
+            name=f"{name}_outlayer",
+            in_channels=layer_sizes[-2],
+            out_channels=layer_sizes[-1],
+            num_convblocks=num_output_convblocks, device=device, dtype=dtype)
 
-    def forward(self, x):
-        x = self.first_layer(x)
-        down_outputs = []
+    def forward(self, initial_x):
+        x = self.first_layer(initial_x)
+        down_outputs = [x]
         for down_layer in self.down_layers:
             x = down_layer(x)
             down_outputs.append(x)
 
         down_outputs_reversed = list(reversed(down_outputs))
 
+        # print(f"down outputs sizes: {[d.size() for d in down_outputs]}")
+
         for (i, up_layer) in enumerate(self.up_layers):
+            # print(f"up layer {i} x size: {x.size()}")
             x = up_layer(x, down_outputs_reversed[i + 1])
 
         x = self.last_layer(x)
+
+        # print(f"ClarificationSimple x size: {x.size()}")
         x = x.squeeze(0).squeeze(0)
+        # print(f"ClarificationSimple x size after sq: {x.size()}")
+        if self.invert:
+            x = initial_x - x
 
         return x
 

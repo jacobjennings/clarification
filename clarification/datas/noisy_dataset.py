@@ -6,8 +6,10 @@ from torch.utils.data import Dataset
 import torchaudio
 
 class NoisyCommonsDataset(Dataset):
-    def __init__(self, batch_size, base_dir='/workspace/noisy-commonvoice-24k-300ms-10ms-opus/en'):
+    def __init__(self, batch_size, device, base_dir, csv_filename):
+        super().__init__()
         self.base_dir = base_dir
+        self.device = device
         with open(f"{base_dir}/info.csv") as csvfile:
             fieldnames = ['sample_rate', 'sample_size', 'overlap_size', 'consumption_batch_size']
             reader = csv.DictReader(csvfile, fieldnames=fieldnames)
@@ -22,7 +24,7 @@ class NoisyCommonsDataset(Dataset):
                 raise ValueError(f"batch_size {self.batch_size} must be a multiple of consumption_batch_size {self.consumption_batch_size}")
             self.consumption_batches_multiplier = self.batch_size // self.consumption_batch_size
             # Opus always decodes at 48khz, bc torchaudio doesn't support passing input sample rate to decoder in ffmpeg
-            self.resampler = torchaudio.transforms.Resample(orig_freq=48000, new_freq=self.sample_rate)
+            self.resampler = torchaudio.transforms.Resample(orig_freq=48000, new_freq=self.sample_rate).to(device)
 
         with open(f"{base_dir}/samples.csv") as csvfile:
             fieldnames = ['path', 'sentence_id']
@@ -40,6 +42,7 @@ class NoisyCommonsDataset(Dataset):
             path = sample_info['path']
             absolute_path = f"{self.base_dir}/{path}"
             audio, _ = torchaudio.load(absolute_path)
+            audio = audio.to(self.device)
             audio = self.resampler(audio)
             if audio_aggregated is None:
                 audio_aggregated = audio
@@ -47,5 +50,7 @@ class NoisyCommonsDataset(Dataset):
                 audio_aggregated = torch.cat((audio_aggregated, audio), dim=1)
 
         audio_samples = torch.stack(audio_aggregated.split(self.sample_size, dim=1))
+
+
 
         return audio_samples

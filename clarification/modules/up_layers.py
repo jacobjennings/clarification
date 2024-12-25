@@ -1,4 +1,5 @@
 """Up layers for 1d u-net"""
+import math
 
 import torch
 import torch.nn as nn
@@ -9,25 +10,50 @@ from . import Glue1D
 
 
 class Up(nn.Module):
-    def __init__(self, in_channels, out_channels, layer_depth, samples_per_batch, device, dtype):
+    def __init__(self, name, in_channels, out_channels, device, dtype, layer_num=None):
         super(Up, self).__init__()
-
-        self.layer_depth = layer_depth
-
         self.transpose = nn.ConvTranspose1d(in_channels=in_channels, out_channels=out_channels, kernel_size=2,
                                             stride=2, device=device, dtype=dtype)
-        self.convBlock = ConvBlock1D(in_channels=out_channels * 2, out_channels=out_channels, device=device, dtype=dtype)
+        self.convBlock = ConvBlock1D(name=f"{name}_conv",
+                                     in_channels=out_channels * 2,
+                                     out_channels=out_channels,
+                                     device=device, dtype=dtype)
+        self.layer_num = layer_num
 
     def forward(self, x1, x2):
-        # print(f"Up layer {self.layer_depth} 1: x1: {x1.size()}")
+        # print(f"1 Up layer in: x1: {x1.size()} x2: {x2.size()} layer {self.layer_num}")
         x1 = self.transpose(x1)
-        # print(f"Up layer {self.layer_depth} 2: x1: {x1.size()}")
+        # print(f"2 Up layer: x1: {x1.size()} layer {self.layer_num}")
         diff = x2.size()[2] - x1.size()[2]  # Calculate difference correctly
+        # print(f"3 diff: {diff}")
         x1 = nnF.pad(x1, (diff // 2, diff - diff // 2))
-        # print(f"Up layer {self.layer_depth} 3:  x1: {x1.size()} x2: {x2.size()} diff: {diff} ")
+        # print(f"4 Up layer:  x1: {x1.size()} x2: {x2.size()} diff: {diff}  layer {self.layer_num}")
         x = torch.cat([x2, x1], dim=1)
 
+        # print(f"5  Up layer:  x: {x.size()} x2: {x2.size()} layer {self.layer_num}")
+
         x = self.convBlock(x)
+        # print(f"6  Up layer out:  x: {x.size()} x2: {x2.size()} diff: {diff} layer {self.layer_num} ")
+
+        return x
+    
+class UpNoCat(nn.Module):
+    def __init__(self, name, in_channels, out_channels, device, dtype, layer_num=None):
+        super(UpNoCat, self).__init__()
+        self.transpose = nn.ConvTranspose1d(in_channels=in_channels, out_channels=out_channels, kernel_size=2,
+                                            stride=2, device=device, dtype=dtype)
+        self.convBlock = ConvBlock1D(name=f"{name}_conv",
+                                     in_channels=out_channels,
+                                     out_channels=out_channels,
+                                     device=device, dtype=dtype)
+        self.layer_num = layer_num
+
+    def forward(self, x):
+        # print(f"1 Up layer in: x1: {x1.size()} x2: {x2.size()} layer {self.layer_num}")
+        x = self.transpose(x)
+        # print(f"2 Up layer: x: {x.size()} layer {self.layer_num}")
+        x = self.convBlock(x)
+        # print(f"6  Up layer out:  x: {x.size()} x2: {x2.size()} diff: {diff} layer {self.layer_num} ")
 
         return x
 
@@ -51,7 +77,7 @@ class UpWithLSTMInput(nn.Module):
         for i in range(layer_num):
             in_sample_size = in_sample_size * 2
 
-        print(f"out_channels: {out_channels}")
+        # print(f"out_channels: {out_channels}")
 
         self.transpose = nn.ConvTranspose1d(in_channels=in_channels,
                                             out_channels=in_channels // 2,
