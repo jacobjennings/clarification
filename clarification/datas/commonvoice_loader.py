@@ -18,14 +18,14 @@ class CommonVoiceLoader:
                  base_dir,
                  summary_writer,
                  dataset_batch_size,
-                 loader_batch_size,
+                 batches_per_iteration,
                  should_pin_memory,
                  num_workers,
                  device):
         self.base_dir = base_dir
         self.summary_writer = summary_writer
         self.dataset_batch_size = dataset_batch_size
-        self.loader_batch_size = loader_batch_size
+        self.loader_batch_size = batches_per_iteration // dataset_batch_size
         self.should_pin_memory = should_pin_memory
         self.num_workers = num_workers
         self.device = device

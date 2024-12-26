@@ -10,6 +10,8 @@ Make sure tensorboard gets reset
 ## Use a separate summary writer for training and validation
 Different directory, make it easier to compare, less data
 
+## TODO: HOW TO UNDERSTAND GRADIENTS FROM LOSSES
+
 ## Write custom loss functions
 Try to normalize loudness of outputs
 Clipping detection

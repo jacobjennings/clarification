@@ -23,7 +23,6 @@ def train():
 
     is_cloud = getpass.getuser() == "root"
 
-    models_dir = "."
     if mac:
         base_dataset_directory = '/Users/jacobjennings/noisy-commonvoice-24k-300ms-10ms-opus/en'
         models_dir = '/Users/jacobjennings/denoise-models/2'
@@ -77,7 +76,7 @@ def train():
             simple_optimizer, start_factor=0.1, end_factor=0.01, total_iters=10000)
         
         config = clarification.training.AudioModelTrainingConfig(
-            model_name=name,
+            name=name,
             model=simple_model,
             optimizer=simple_optimizer,
             scheduler=simple_scheduler,
@@ -97,7 +96,7 @@ def train():
             simple_optimizer, start_factor=0.1, end_factor=0.01, total_iters=10000)
         
         config = clarification.training.AudioModelTrainingConfig(
-            model_name=name,
+            name=name,
             model=simple_model,
             optimizer=simple_optimizer,
             scheduler=simple_scheduler,
@@ -119,7 +118,7 @@ def train():
             simple_optimizer, start_factor=0.1, end_factor=0.01, total_iters=10000)
 
         config = clarification.training.AudioModelTrainingConfig(
-            model_name=name,
+            name=name,
             model=simple_model,
             optimizer=simple_optimizer,
             scheduler=simple_scheduler,
@@ -148,8 +147,8 @@ def train():
         # simple_maker("simple15", [40, 80, 160, 80, 40]),
         # simple_maker("simple16", [64, 128, 256, 128, 64]),
         # simple_maker("simple17", [16, 32, 64, 32, 16]),
-        # dense_maker("dense1", [32, 64, 128, 64, 32])
-        # dense_maker("dense2", [48, 96, 192, 96, 48])
+        dense_maker("dense1", [32, 64, 128, 64, 32])
+        dense_maker("dense2", [48, 96, 192, 96, 48])
         # dense_maker("dense3", [64, 128, 256, 128, 64])
         # dense_maker("dense4", [96, 64, 64, 64, 96])
         # dense_maker("dense5", [64, 64, 64, 64, 64])
@@ -160,7 +159,7 @@ def train():
         # dense_maker("dense8", [256, 512, 1024, 512, 256])
         # simple_maker("simple18", [96, 96, 96, 96, 96]),
         # simple_maker("simple19", [256, 512, 768, 1024, 768, 512, 256]),
-        dense_lstm_maker("denselstm8", [128, 128, 128, 128, 128])
+        # dense_lstm_maker("denselstm8", [128, 128, 128, 128, 128])
     ]
 
     for model_config in models:
@@ -183,10 +182,14 @@ def train():
 
     loss_functions = [
         # Main group
-        ("L1Loss", 2.0, nn.L1Loss(), False, None),
-        ("SISDRLoss", 1.5, auraloss.time.SISDRLoss().to(device), False, None),
-        # Mel and random seem to fight each other when loss levels out.
-        ("MelSTFTLoss", 0.5, auraloss.freq.MelSTFTLoss(sample_rate=sample_rate, n_mels=128, device=device), False, None),
+        clarification.training.AudioLossFunctionConfig(
+            name="L1Loss", weight=2.0, fn=nn.L1Loss().to(device), is_unary=False, batch_size=None),
+        clarification.training.AudioLossFunctionConfig(
+            name="SISDRLoss", weight=1.5, fn=auraloss.time.SISDRLoss().to(device), is_unary=False, batch_size=None),
+        clarification.training.AudioLossFunctionConfig(
+            name="MelSTFTLoss", weight=0.5,
+            fn=auraloss.freq.MelSTFTLoss(sample_rate=sample_rate, n_mels=128, device=device).to(device),
+            is_unary=False, batch_size=None),
 
         # ("L1Loss", 5.0, nn.L1Loss(), False, None),
         # ("MSELoss", 10.0, nn.MSELoss(), False, None),
@@ -204,13 +207,11 @@ def train():
         # ("SISDRLoss", 1.5, auraloss.time.SISDRLoss().to(device), False, None),
     ]
 
-    loss_functions = [(a, b, c.to(device), d, e) for a, b, c, d, e in loss_functions]
-    loader_batch_size = batches_per_iteration // 8
     loader = clarification.datas.commonvoice_loader.CommonVoiceLoader(
         base_dir=base_dataset_directory,
         summary_writer=summary_writer,
         dataset_batch_size=dataset_batch_size,
-        loader_batch_size=loader_batch_size,
+        batches_per_iteration=batches_per_iteration,
         should_pin_memory=device == "cuda",
         num_workers=3,
         device=device
@@ -219,12 +220,17 @@ def train():
     loader.create_loaders()
 
     summary_writer.add_text("loader_info",
-                            f"Training data size in batches: {len(loader.train_loader)}, samples: {len(loader.train_loader) * dataset_batch_size * loader_batch_size * samples_per_batch}")
+                            f"Training data size in batches: {len(loader.train_loader)}, samples: {len(loader.train_loader) * batches_per_iteration * samples_per_batch}")
 
+    validation_config = clarification.training.ValidationConfig(
+        test_loader=loader.test_loader,
+        test_batches=10000,
+        run_validation_every_batches=20000
+    )
     trainer = clarification.training.AudioTrainer(
         input_dataset_loader=loader.train_loader,
         models=models,
-        loss_function_tuples=loss_functions,
+        loss_function_configs=loss_functions,
         sample_rate=sample_rate,
         samples_per_batch=samples_per_batch,
         batches_per_iteration=batches_per_iteration,
@@ -236,6 +242,7 @@ def train():
         send_audio_clip_every_iterations=150,
         dataset_batches_length=len(loader.train_loader),
         dataset_batch_size=dataset_batch_size,
+        validation_config=validation_config,
     )
 
     trainer.train()
