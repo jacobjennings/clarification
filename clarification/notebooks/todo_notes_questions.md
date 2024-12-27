@@ -1,10 +1,5 @@
 ## Are there existing trainers that I can use as a reference to improve audio_trainer.py?
 
-## Set up trainer to rotate through models
-One at a time is fastest
-Should this just be a script?
-Make sure tensorboard gets reset
-
 ## Add spectrograms to tensorboard outputs
 
 ## Use a separate summary writer for training and validation

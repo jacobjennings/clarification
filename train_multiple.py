@@ -2,8 +2,10 @@
 import platform
 import getpass
 import pathlib
-import shutil
 from datetime import datetime
+from pathlib import Path
+from multiprocessing import Process
+import subprocess
 
 import torch
 import torch.nn as nn
@@ -14,10 +16,10 @@ import clarification
 
 from torch.utils.tensorboard import SummaryWriter
 
+def start_tensorboard(logdir):
+    subprocess.run(["venv/bin/tensorboard", "--logdir", logdir, "--bind_all"])
 
 def train():
-    summary_writer = SummaryWriter()
-
     mac = platform.system() == "Darwin"
     device = "mps" if mac else "cuda"
 
@@ -36,11 +38,13 @@ def train():
     pathlib.Path(models_dir).mkdir(parents=True, exist_ok=True)
     
     # Rotate tensorboard outputs
-    runs_dir = pathlib.Path('runs')
-    if runs_dir.exists() and runs_dir.is_dir():
-        date_str = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-        new_runs_dir = f'runs-{date_str}'
-        shutil.move(str(runs_dir), new_runs_dir)
+    date_str = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+    log_dir = f'/workspace/runs/runs-{date_str}'
+    Path(log_dir).mkdir(parents=True, exist_ok=True)
+    summary_writer = SummaryWriter(log_dir=log_dir)
+    print(f"Tensorboard start in directory: {str(Path(log_dir).parent)} logdir: {log_dir}")
+    tb_process = Process(target=start_tensorboard, args=(str(Path(log_dir).parent),))
+    tb_process.start()
 
     if device == "cuda":
         torch.cuda.empty_cache()
@@ -81,6 +85,7 @@ def train():
             optimizer=simple_optimizer,
             scheduler=simple_scheduler,
             batches_per_model_rotation=1000000,
+            writer=SummaryWriter(log_dir=f"{log_dir}-{name}")
         )
 
         return config
@@ -100,7 +105,8 @@ def train():
             model=simple_model,
             optimizer=simple_optimizer,
             scheduler=simple_scheduler,
-            batches_per_model_rotation=1000000,
+            batches_per_model_rotation=100000,
+            writer=SummaryWriter(log_dir=f"{log_dir}-{name}")
         )
 
         return config
@@ -123,6 +129,7 @@ def train():
             optimizer=simple_optimizer,
             scheduler=simple_scheduler,
             batches_per_model_rotation=1000000,
+            writer=SummaryWriter(log_dir=f"{log_dir}-{name}")
         )
         return config
 
@@ -147,8 +154,8 @@ def train():
         # simple_maker("simple15", [40, 80, 160, 80, 40]),
         # simple_maker("simple16", [64, 128, 256, 128, 64]),
         # simple_maker("simple17", [16, 32, 64, 32, 16]),
-        dense_maker("dense1", [32, 64, 128, 64, 32])
-        dense_maker("dense2", [48, 96, 192, 96, 48])
+        dense_maker("dense1", [32, 64, 128, 64, 32]),
+        dense_maker("dense2", [48, 96, 192, 96, 48]),
         # dense_maker("dense3", [64, 128, 256, 128, 64])
         # dense_maker("dense4", [96, 64, 64, 64, 96])
         # dense_maker("dense5", [64, 64, 64, 64, 64])
@@ -224,8 +231,8 @@ def train():
 
     validation_config = clarification.training.ValidationConfig(
         test_loader=loader.test_loader,
-        test_batches=10000,
-        run_validation_every_batches=20000
+        test_batches=50000,
+        run_validation_every_batches=200000
     )
     trainer = clarification.training.AudioTrainer(
         input_dataset_loader=loader.train_loader,
@@ -237,9 +244,7 @@ def train():
         device=device,
         overlap_samples=overlap_samples,
         model_weights_dir=models_dir,
-        model_weights_save_every_iterations=1000,
         summary_writer=summary_writer,
-        send_audio_clip_every_iterations=150,
         dataset_batches_length=len(loader.train_loader),
         dataset_batch_size=dataset_batch_size,
         validation_config=validation_config,

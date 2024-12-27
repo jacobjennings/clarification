@@ -50,8 +50,8 @@ from torch.utils.tensorboard import SummaryWriter
 base_dataset_directory = '/workspace/cv-20/cv-corpus-20.0-2024-12-06'
 
 # Uncomment these. Safety measure to avoid accidental use.
-train_out_dataset_directory = '/workspace/noisy-commonvoice-24k-300ms-5ms-opus/train'
-test_out_dataset_directory = '/workspace/noisy-commonvoice-24k-300ms-5ms-opus/test'
+train_out_dataset_directory = '/workspace/noisy-commonvoice-24k-300ms-5ms-opus2/train'
+test_out_dataset_directory = '/workspace/noisy-commonvoice-24k-300ms-5ms-opus2/test'
 
 num_processed = Value("l", 0)
 
@@ -62,7 +62,7 @@ megachunk_size = 1000
 
 consumption_batch_size = 16
 process_batch_size = 96
-process_count = 16
+process_count = 8
 
 resample_lock = threading.Lock()
 
@@ -280,7 +280,7 @@ def process_data():
                 "consumption_batch_size": consumption_batch_size
             })
             
-    write_info_csv(train_out_dataset_directory)
+    # write_info_csv(train_out_dataset_directory)
     write_info_csv(test_out_dataset_directory)
 
     train_enumerated_batched_iter = EnumeratedIter(itertools.batched(train_data_loader, process_batch_size))
@@ -291,15 +291,15 @@ def process_data():
     test_zipped_dataset = zip(
         test_enumerated_batched_iter, test_chunk_iter, itertools.repeat((test_data_loader_len, t0, sample_size, overlap_size, resample_rate, test_out_dataset_directory)))
 
-    write_path = f"{train_out_dataset_directory}/train.csv"
-    with open(write_path, 'w', newline='\n') as csvfile:
-        fieldnames = ['path']
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-
-        with Pool(processes=process_count) as pool:
-            for write_dicts in pool.imap_unordered(process_file, train_zipped_dataset, chunksize=8):
-                for write_dict in write_dicts:
-                    writer.writerow(write_dict)
+    # write_path = f"{train_out_dataset_directory}/train.csv"
+    # with open(write_path, 'w', newline='\n') as csvfile:
+    #     fieldnames = ['path']
+    #     writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+    #
+    #     with Pool(processes=process_count) as pool:
+    #         for write_dicts in pool.imap_unordered(process_file, train_zipped_dataset, chunksize=8):
+    #             for write_dict in write_dicts:
+    #                 writer.writerow(write_dict)
 
     write_path = f"{test_out_dataset_directory}/test.csv"
     with open(write_path, 'w', newline='\n') as csvfile:
