@@ -6,11 +6,17 @@ from datetime import datetime
 from pathlib import Path
 from multiprocessing import Process
 import subprocess
+import gc
+import time
+import shutil
+
+from collections.abc import Sequence
 
 import torch
 import torch.nn as nn
 
 import auraloss
+
 
 import clarification
 
@@ -37,19 +43,49 @@ def train():
 
     pathlib.Path(models_dir).mkdir(parents=True, exist_ok=True)
     
-    # Rotate tensorboard outputs
-    date_str = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-    log_dir = f'/workspace/runs/runs-{date_str}'
-    Path(log_dir).mkdir(parents=True, exist_ok=True)
-    summary_writer = SummaryWriter(log_dir=log_dir)
-    print(f"Tensorboard start in directory: {str(Path(log_dir).parent)} logdir: {log_dir}")
-    tb_process = Process(target=start_tensorboard, args=(str(Path(log_dir).parent),))
+    print(f"Tensorboard start in directory: /workspace/runs")
+    # noinspection PyRedundantParentheses
+    tb_process = Process(target=start_tensorboard, args=(("/workspace/runs",)))
     tb_process.start()
 
     if device == "cuda":
         torch.cuda.empty_cache()
     else:
         torch.mps.empty_cache()
+    
+    should_retry = True
+    batches_per_iteration = 128
+    if batches_per_iteration % 16 != 0:
+        print("batches_per_iteration must be divisible by 16")
+
+    while should_retry:
+        print(f"Attempting training with batches_per_iteration: {batches_per_iteration}")
+        date_str = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+        log_dir = f'/workspace/runs/runs-{date_str}'
+        Path(log_dir).mkdir(parents=True, exist_ok=True)
+        try:
+            train_2(batches_per_iteration, device, base_dataset_directory, models_dir, log_dir, date_str)
+    
+        except torch.OutOfMemoryError as e:
+            print(e)
+            should_retry = True
+            batches_per_iteration = batches_per_iteration - 32
+            if batches_per_iteration < 32:
+                should_retry = False
+            else:
+                print(f"Retrying with batches_per_iteration: {batches_per_iteration}")
+                shutil.rmtree(log_dir)
+                time.sleep(1)
+                gc.collect()
+                torch.cuda.empty_cache()
+                time.sleep(1)
+            continue
+    
+
+    
+def train_2(batches_per_iteration: int, device: str, base_dataset_directory: str, models_dir: str, log_dir: str, date_str: str):
+    # Rotate tensorboard outputs
+    summary_writer = SummaryWriter(log_dir=log_dir)
 
     sample_rate = 24000
     dtype = torch.float32
@@ -59,7 +95,6 @@ def train():
 
     overlap_ms = 10
     overlap_samples = int((overlap_ms / 1000) * sample_rate)
-    batches_per_iteration = 160
     dataset_batch_size = 8
 
     # def dd_encoder_maker(name, scalar, layer_sizes):
@@ -84,7 +119,7 @@ def train():
             model=simple_model,
             optimizer=simple_optimizer,
             scheduler=simple_scheduler,
-            batches_per_model_rotation=1000000,
+            batches_per_model_rotation=100000,
             writer=SummaryWriter(log_dir=f"{log_dir}-{name}")
         )
 
@@ -128,7 +163,7 @@ def train():
             model=simple_model,
             optimizer=simple_optimizer,
             scheduler=simple_scheduler,
-            batches_per_model_rotation=1000000,
+            batches_per_model_rotation=100000,
             writer=SummaryWriter(log_dir=f"{log_dir}-{name}")
         )
         return config
@@ -154,15 +189,15 @@ def train():
         # simple_maker("simple15", [40, 80, 160, 80, 40]),
         # simple_maker("simple16", [64, 128, 256, 128, 64]),
         # simple_maker("simple17", [16, 32, 64, 32, 16]),
-        dense_maker("dense1", [32, 64, 128, 64, 32]),
-        dense_maker("dense2", [48, 96, 192, 96, 48]),
+        # dense_maker("dense2", [48, 96, 192, 96, 48]),
+        # dense_maker("dense1", [32, 64, 128, 64, 32]),
         # dense_maker("dense3", [64, 128, 256, 128, 64])
         # dense_maker("dense4", [96, 64, 64, 64, 96])
         # dense_maker("dense5", [64, 64, 64, 64, 64])
         # dense_maker("dense6", [128, 196, 256, 196, 128])
-        # dense_lstm_maker("denselstm6", [128, 196, 256, 196, 128])
+        # dense_lstm_maker("denselstm7", [256, 320, 384, 320, 256]),
+        dense_lstm_maker("denselstm6", [128, 196, 256, 196, 128])
         # dense_maker("dense7", [256, 320, 384, 320, 256])
-        # dense_maker("denselstm7", [256, 320, 384, 320, 256])
         # dense_maker("dense8", [256, 512, 1024, 512, 256])
         # simple_maker("simple18", [96, 96, 96, 96, 96]),
         # simple_maker("simple19", [256, 512, 768, 1024, 768, 512, 256]),
@@ -220,7 +255,7 @@ def train():
         dataset_batch_size=dataset_batch_size,
         batches_per_iteration=batches_per_iteration,
         should_pin_memory=device == "cuda",
-        num_workers=3,
+        num_workers=2,
         device=device
     )
 
@@ -234,6 +269,7 @@ def train():
         test_batches=50000,
         run_validation_every_batches=200000
     )
+    
     trainer = clarification.training.AudioTrainer(
         input_dataset_loader=loader.train_loader,
         models=models,
@@ -243,14 +279,15 @@ def train():
         batches_per_iteration=batches_per_iteration,
         device=device,
         overlap_samples=overlap_samples,
+        training_date_str=date_str,
         model_weights_dir=models_dir,
         summary_writer=summary_writer,
         dataset_batches_length=len(loader.train_loader),
         dataset_batch_size=dataset_batch_size,
         validation_config=validation_config,
     )
-
     trainer.train()
+
 
 
 if __name__ == '__main__':

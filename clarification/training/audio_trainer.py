@@ -1,4 +1,6 @@
 import gc
+import os
+import pathlib
 import time
 import pprint
 
@@ -8,8 +10,10 @@ from typing import List, Optional
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from scipy.constants import precision
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
+from torch.amp import autocast
 
 from ..util import better_split_discard_remainder
 
@@ -56,14 +60,18 @@ class AudioTrainer:
             dataset_batch_size: int,
             device: str,
             overlap_samples: int,
+            training_date_str: str,
             model_weights_dir: Optional[str] = None,
-            summary_writer: Optional[SummaryWriter] = None,
             model_weights_save_every_batches: int = 400000,
+            summary_writer: Optional[SummaryWriter] = None,
             send_audio_clip_every_batches: int = 99000,
             log_info_every_batches: int = 15000,
+            step_every_iterations: int = 1,
             dataset_batches_length: int = None,
             training_classifier: bool = False,
-            validation_config: Optional[ValidationConfig] = None
+            validation_config: Optional[ValidationConfig] = None,
+            use_scaler_dtype = torch.float16,
+            amp_loss_scalar: float = 0.1
     ):
         """Training loop for audio.
         
@@ -81,8 +89,13 @@ class AudioTrainer:
             model_weights_save_every_batches: Save model weights every n iterations. If not specified, weights are not saved.
             summary_writer: SummaryWriter for logging to tensorboard. If not specified, no logging is done.
             send_audio_clip_every_batches: Send audio clips to tensorboard every n
+            log_info_every_batches: Log extra info every n batches.
+            step_every_iterations: Step optimizer every n iterations.
             dataset_batches_length: Length of batches expected from the dataset
             training_classifier: If true, this is a classifier model. Data is expected to be a tuple of ([batches, channels, samples], [batches, labels]).
+            validation_config: ValidationConfig.
+            use_scaler_dtype: Use mixed precision training.
+            amp_loss_scalar: Loss scalar for mixed precision training. For some reason, loss values tend to explode, so this is a way to counteract that.
 
         """
         self.input_dataset_loader = input_dataset_loader
@@ -101,6 +114,11 @@ class AudioTrainer:
         self.dataset_batches_length = dataset_batches_length
         self.training_classifier = training_classifier
         self.validation_config = validation_config
+        self.step_every_iterations = step_every_iterations
+        self.training_date_str = training_date_str
+        self.use_scaler_dtype = use_scaler_dtype
+        self.scaler = torch.amp.GradScaler("cuda") if use_scaler_dtype else None
+        self.amp_loss_scalar = amp_loss_scalar
 
         self.samples_per_iteration = self.samples_per_batch * self.batches_per_iteration
         self.iteration_count = 0
@@ -116,33 +134,6 @@ class AudioTrainer:
         self.batches_since_last_save = 0
         self.batches_since_last_send_audio_clips = 0
         self.batches_since_last_log = 0
-        
-        # loss_layout = {
-        #     "loss": ["Multiline", [f"loss_total/{model_config.name}" for model_config in self.models]],
-        # }
-        # loss_layout.update(
-        #     { f"loss_{loss_config.name}": 
-        #         ["Multiline", [f"loss_{loss_config.name}/{model_config.name}" 
-        #                        for model_config in self.models]]
-        #             for loss_config in self.loss_function_configs }
-        # )
-        # loss_layout.update(
-        #     { f"loss_weighted_{loss_config.name}": 
-        #         ["Multiline", [f"loss_weighted_{loss_config.name}/{model_config.name}" 
-        #                        for model_config in self.models]]
-        #             for loss_config in self.loss_function_configs }
-        # )
-        # loss_layout.update(
-        #     { f"samples_processed": ["Multiline", ["samples_processed"]] }
-        # )
-        
-        # layout = {
-        #     "Loss": loss_layout
-        # }
-        
-        # print(f"custom scalars layout: {pprint.pformat(layout)}")
-        # summary_writer.add_custom_scalars(layout)
-
 
     def train(self):
         self.train_start_time = time.time()
@@ -160,64 +151,85 @@ class AudioTrainer:
 
         input_loader_iter = iter(self.input_dataset_loader)
 
-        for model_config in self.models:
-            self.samples_processed_since_last_log = 0
-            self.iteration_count += 1
-            self.batches_since_last_save = 0
-            self.batches_since_last_send_audio_clips = 0
-            self.batches_since_last_log = 0
-
-            model_batches_count_this_rotation = 0
-            continue_training = True
-            while continue_training:
-                send_audio_clips = False
-                if self.batches_since_last_send_audio_clips > self.send_audio_clip_every_batches != 0:
-                    send_audio_clips = True
-                    self.batches_since_last_send_audio_clips = 0
-
-                should_log_extra_stuff = self.batches_since_last_log + self.batches_per_iteration > self.log_info_every_batches
-                result = self.run_iteration(
-                    model_config=model_config,
-                    input_loader_iter=input_loader_iter,
-                    should_record_audio_clips=send_audio_clips,
-                    should_log_extra_stuff=should_log_extra_stuff,
-                    writer_step=model_config.batches_trained,
-                    is_validation=False
-                )
-                model_batches_count_this_rotation += self.batches_per_iteration
-                model_config.batches_trained += self.batches_per_iteration
-                self.samples_processed += self.batches_per_iteration * self.samples_per_iteration
-                self.samples_processed_since_last_log += self.batches_per_iteration * self.samples_per_iteration
+        print(f"Starting epoch {self.epoch_count}")
+        epoch_finished = False
+        while not epoch_finished:
+            for model_config in self.models:
+                print(f"Model training rotation start for {model_config.name} @ epoch {self.epoch_count}")
+                self.samples_processed_since_last_log = 0
                 self.iteration_count += 1
-                self.batches_count += self.batches_per_iteration
-                self.batches_since_last_validation += self.batches_per_iteration
-                self.batches_since_last_save += self.batches_per_iteration
-                self.batches_since_last_send_audio_clips += self.batches_per_iteration
-                self.batches_since_last_log += self.batches_per_iteration
+                self.batches_since_last_save = 0
+                self.batches_since_last_send_audio_clips = 0
+                self.batches_since_last_log = 0
+                iterations_since_step = 0
 
-                continue_training = result.should_continue and model_batches_count_this_rotation < model_config.batches_per_model_rotation
+                model_batches_count_this_rotation = 0
+                continue_training = True
+                while continue_training:
+                    send_audio_clips = False
+                    if self.batches_since_last_send_audio_clips > self.send_audio_clip_every_batches:
+                        send_audio_clips = True
+                        self.batches_since_last_send_audio_clips = 0
 
-                if self.batches_since_last_log > self.log_info_every_batches:
-                    elapsed_training_time = time.time() - self.train_start_time
-                    elapsed_time_since_logged_samples_processed = time.time() - self.last_samples_processed_log_time
+                    should_log_extra_stuff = self.batches_since_last_log + self.batches_per_iteration > self.log_info_every_batches
+                    should_step_optimizer = False
+                    if iterations_since_step == self.step_every_iterations or self.step_every_iterations == 1:
+                        iterations_since_step = 0
+                        should_step_optimizer = True
+                    result = self.run_iteration(
+                        model_config=model_config,
+                        input_loader_iter=input_loader_iter,
+                        should_record_audio_clips=send_audio_clips,
+                        should_log_extra_stuff=should_log_extra_stuff,
+                        writer_step=model_config.batches_trained,
+                        should_step_optimizer=should_step_optimizer,
+                        allow_mixed_precision=True,
+                        is_validation=False
+                    )
+                    model_batches_count_this_rotation += self.batches_per_iteration
+                    model_config.batches_trained += self.batches_per_iteration
+                    iterations_since_step += 1
+                    self.samples_processed += self.batches_per_iteration * self.samples_per_iteration
+                    self.samples_processed_since_last_log += self.batches_per_iteration * self.samples_per_iteration
+                    self.iteration_count += 1
+                    self.batches_count += self.batches_per_iteration
+                    self.batches_since_last_validation += self.batches_per_iteration
+                    self.batches_since_last_save += self.batches_per_iteration
+                    self.batches_since_last_send_audio_clips += self.batches_per_iteration
+                    self.batches_since_last_log += self.batches_per_iteration
 
-                    self.log_post_iteration_stuff(elapsed_time_since_logged_samples_processed, elapsed_training_time, model_config)
+                    epoch_finished = not result.should_continue
+                    continue_training = result.should_continue and model_batches_count_this_rotation < model_config.batches_per_model_rotation
 
-                    self.last_samples_processed_log_time = time.time()
-                    self.samples_processed_since_last_log = 0
-                    self.batches_since_last_log = 0
-                    self.summary_writer.flush()
+                    if self.batches_since_last_log > self.log_info_every_batches:
+                        elapsed_training_time = time.time() - self.train_start_time
+                        elapsed_time_since_logged_samples_processed = time.time() - self.last_samples_processed_log_time
 
-                if self.batches_since_last_save > self.model_weights_save_every_batches != 0:
-                    time_string = time.strftime("%Y%m%d-%H%M%S")
-                    model_save_path = self.model_weights_dir + f"/model_save_path_{model_config.name}-{time_string}-{model_config.batches_trained}"
-                    model_config.writer.add_text(f"model_save_path_{model_config.name}", model_save_path, model_config.batches_trained)
-                    torch.save(model_config.model.state_dict(), model_save_path)
-                    self.batches_since_last_save = 0
+                        self.log_post_iteration_stuff(elapsed_time_since_logged_samples_processed, elapsed_training_time, model_config)
 
-        if self.batches_since_last_validation >= self.validation_config.run_validation_every_batches:
-            self.run_validation()
-            self.batches_since_last_validation = 0
+                        self.last_samples_processed_log_time = time.time()
+                        self.samples_processed_since_last_log = 0
+                        self.batches_since_last_log = 0
+                        self.summary_writer.flush()
+
+                    if self.batches_since_last_save > self.model_weights_save_every_batches:
+                        # Better to overwrite to avoid stacking up disk space.
+                        model_save_path = self.model_weights_dir + f"/model_save_path_{model_config.name}-{self.training_date_str}"
+                        model_config.writer.add_text(f"model_save_path_{model_config.name}", model_save_path, model_config.batches_trained)
+                        if os.path.exists(model_save_path):
+                            os.remove(model_save_path)
+                        torch.save(model_config.model.state_dict(), model_save_path)
+                        self.batches_since_last_save = 0
+
+            if self.batches_since_last_validation >= self.validation_config.run_validation_every_batches:
+                print(f"Running validation @ epoch {self.epoch_count}")
+
+                self.run_validation()
+                self.batches_since_last_validation = 0
+                
+            if epoch_finished:
+                break
+
 
     def log_post_iteration_stuff(self, elapsed_time_since_logged_samples_processed, elapsed_training_time, model_config):
         self.summary_writer.add_scalar("samples_processed", self.samples_processed,
@@ -244,6 +256,8 @@ class AudioTrainer:
             should_record_audio_clips: bool,
             should_log_extra_stuff: bool,
             writer_step: int,
+            should_step_optimizer: bool,
+            allow_mixed_precision: bool,
             is_validation: bool):
 
         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Data preparation ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -263,7 +277,7 @@ class AudioTrainer:
                 f"{writer_tag_prefix}perf_data_prep", perf_data_prep_end - perf_iteration_start, writer_step)
 
         if should_record_audio_clips:
-            self.record_noisy_clear_audio_clips(golden_reconstructed, input_subsamples, model_config, writer_tag_prefix)
+            self.record_noisy_clear_audio_clips(golden_reconstructed, input_subsamples, model_config, writer_step, writer_tag_prefix)
 
         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Model training ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -277,7 +291,13 @@ class AudioTrainer:
             model.train()
 
         input_unsqueezed = input_subsamples.unsqueeze(dim=1)
-        prediction_raw = model(input_unsqueezed)
+        if self.scaler and allow_mixed_precision:
+            with autocast("cuda", dtype=self.use_scaler_dtype):
+                prediction_raw = model(input_unsqueezed)
+            prediction_raw = self.scaler.scale(prediction_raw)
+        else:
+            prediction_raw = model(input_unsqueezed)
+
         if not self.training_classifier:
             prediction_raw = prediction_raw.squeeze(dim=1)
 
@@ -299,7 +319,9 @@ class AudioTrainer:
             model_config,
             prediction,
             should_log_extra_stuff,
-            writer_tag_prefix)
+            writer_step,
+            writer_tag_prefix,
+            allow_mixed_precision)
 
         del prediction
 
@@ -309,20 +331,25 @@ class AudioTrainer:
             loss.backward()
             del loss
 
-            optimizer.step()
+            if should_step_optimizer:
+                if self.scaler and allow_mixed_precision:
+                    self.scaler.step(optimizer)
+                    self.scaler.update()
+                else:
+                    optimizer.step()
 
-            if scheduler:
-                scheduler.step()
+                if scheduler:
+                    scheduler.step()
 
             model.eval()
 
         if should_record_audio_clips:
-            self.record_prediction_audio_clips(model_config, prediction_cpu, prediction_raw, writer_tag_prefix)
+            self.record_prediction_audio_clips(model_config, prediction_cpu, prediction_raw, writer_step, writer_tag_prefix)
 
         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Log things to tensorboard ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
         if should_log_extra_stuff:
-            self.log_extra_stuff(perf_iteration_start, writer_tag_prefix)
+            self.log_extra_stuff(perf_iteration_start, model_config, writer_step, writer_tag_prefix)
 
         return IterationResult(
             should_continue=True,
@@ -345,7 +372,7 @@ class AudioTrainer:
                 print("prediction_cpu is None!")
 
     def loss_calculation(self, golden_classifier_values, golden_reconstructed, model_config, prediction,
-                         should_log_extra_stuff, writer_step, writer_tag_prefix):
+                         should_log_extra_stuff, writer_step, writer_tag_prefix, allow_mixed_precision):
         loss = None
         for loss_config in self.loss_function_configs:
             if self.training_classifier and prediction.size() != golden_classifier_values.size():
@@ -359,9 +386,23 @@ class AudioTrainer:
                 goldens = better_split_discard_remainder(goldens, loss_config.batch_size)
 
             if loss_config.is_unary:
-                loss_out = torch.mean(loss_config.fn(prediction))
+                if self.scaler and allow_mixed_precision:
+                    with autocast("cuda", dtype=self.use_scaler_dtype):
+                        loss_out = loss_config.fn(prediction)
+                    loss_out = self.scaler.scale(loss_out)
+                else:
+                    loss_out = loss_config.fn(prediction)
+                loss_out = torch.mean(loss_out)
             else:
-                loss_out = loss_config.fn(prediction, goldens)
+                if self.scaler and allow_mixed_precision:
+                    with autocast("cuda", dtype=self.use_scaler_dtype):
+                        loss_out = loss_config.fn(prediction, goldens)
+                    loss_out = self.scaler.scale(loss_out)
+                else:
+                    loss_out = loss_config.fn(prediction, goldens)
+
+            if self.scaler and allow_mixed_precision:
+                loss_out *= self.amp_loss_scalar
 
             loss_out_weighted = loss_out * loss_config.weight
 
@@ -430,6 +471,7 @@ class AudioTrainer:
             model_batches_count = 0
             continue_eval = True
             input_loader_iter = iter(self.validation_config.test_loader)
+            iterations_since_step = 0
             while continue_eval:
                 send_audio_clips = False
                 if self.batches_since_last_send_audio_clips > self.send_audio_clip_every_batches != 0:
@@ -437,16 +479,24 @@ class AudioTrainer:
                     self.batches_since_last_send_audio_clips = 0
                 
                 should_log_extra_stuff = self.batches_since_last_log + self.batches_per_iteration > self.validation_config.log_every_batches
+                should_step_optimizer = False
+                if iterations_since_step == self.step_every_iterations or self.step_every_iterations == 1:
+                    iterations_since_step = 0
+                    should_step_optimizer = True
+
                 result = self.run_iteration(
                     model_config=model_config,
                     input_loader_iter=input_loader_iter,
                     should_record_audio_clips=send_audio_clips,
                     should_log_extra_stuff=should_log_extra_stuff,
                     writer_step=model_config.batches_validated,
+                    should_step_optimizer=should_step_optimizer,
+                    allow_mixed_precision=False,
                     is_validation=True
                 )
                 model_config.batches_validated += self.batches_per_iteration
                 model_batches_count += self.batches_per_iteration
+                iterations_since_step += 1
                 self.batches_since_last_send_audio_clips += self.batches_per_iteration
                 self.batches_since_last_log += self.batches_per_iteration
 
