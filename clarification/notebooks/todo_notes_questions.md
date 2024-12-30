@@ -1,19 +1,19 @@
 
-## slower learning rate for mixed precision
+## Work on ext4 containers and opus-ify base dataset
 
-## Lower input sample rate, higher output sample rate
+## Gradient clipping schedule?
 
-## Super resolution
+## LSTM at smaller model sizes
+
+## Revisit other layer shapes / architectures
+Lower input sample rate, higher output sample rate
+Super resolution
 
 ## vast.ai cli script
 
 ## Are there existing trainers that I can use as a reference to improve audio_trainer.py?
 
 ## Add spectrograms to tensorboard outputs
-
-## TODO: HOW TO UNDERSTAND GRADIENTS FROM LOSSES
-
-## Gradient clipping
 
 ## Write custom loss functions
 Try to normalize loudness of outputs

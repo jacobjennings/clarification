@@ -42,7 +42,7 @@ class ClarificationDense(nn.Module):
                         layer_num=i)
             self.up_layers.add_module("up_" + str(i), up)
 
-        print(f"Out layer: in_channels: {layer_sizes[-1]} out_channels: 1")
+        # print(f"Out layer: in_channels: {layer_sizes[-1]} out_channels: 1")
         self.last_layer = OutLayer(
             name=f"{name}_outlayer",
             in_channels=sum(output_sizes),

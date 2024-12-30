@@ -10,10 +10,10 @@ from typing import List, Optional
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from scipy.constants import precision
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from torch.amp import autocast
+from torch.profiler import profile, record_function, ProfilerActivity
 
 from ..util import better_split_discard_remainder
 
@@ -27,6 +27,9 @@ class AudioModelTrainingConfig:
     writer: SummaryWriter
     batches_trained: int = 0
     batches_validated: int = 0
+    batches_since_last_save = 0
+    batches_since_last_send_audio = 0
+    norm_clip: float | None = 1.5
     
 @dataclass
 class AudioLossFunctionConfig:
@@ -42,7 +45,7 @@ class ValidationConfig:
     test_batches: int
     run_validation_every_batches: int
     log_every_batches: int = 5000
-
+    
 @dataclass
 class IterationResult:
     # pylint: disable=missing-class-docstring
@@ -62,16 +65,21 @@ class AudioTrainer:
             overlap_samples: int,
             training_date_str: str,
             model_weights_dir: Optional[str] = None,
-            model_weights_save_every_batches: int = 400000,
+            model_weights_save_every_batches: int = 100000,
+            profile_output_dir: Optional[str] = None,
             summary_writer: Optional[SummaryWriter] = None,
-            send_audio_clip_every_batches: int = 99000,
+            send_audio_clip_every_batches: int = 45000,
             log_info_every_batches: int = 15000,
             step_every_iterations: int = 1,
             dataset_batches_length: int = None,
             training_classifier: bool = False,
             validation_config: Optional[ValidationConfig] = None,
-            use_scaler_dtype = torch.float16,
-            amp_loss_scalar: float = 0.1
+            use_scaler_dtype = None,
+            amp_loss_scalar: float = 0.1,
+            stop_amp_after_batches = 300000,
+            matmul_batch_count_to_precision: dict[int, str] = None,
+            profile_every_batches: int | None = 50000,
+
     ):
         """Training loop for audio.
         
@@ -109,6 +117,7 @@ class AudioTrainer:
         self.overlap_samples = overlap_samples
         self.model_weights_dir = model_weights_dir
         self.model_weights_save_every_batches = model_weights_save_every_batches
+        self.profile_output_dir = profile_output_dir
         self.summary_writer = summary_writer
         self.send_audio_clip_every_batches = send_audio_clip_every_batches
         self.dataset_batches_length = dataset_batches_length
@@ -119,6 +128,9 @@ class AudioTrainer:
         self.use_scaler_dtype = use_scaler_dtype
         self.scaler = torch.amp.GradScaler("cuda") if use_scaler_dtype else None
         self.amp_loss_scalar = amp_loss_scalar
+        self.stop_amp_after_batches = stop_amp_after_batches
+        self.matmul_batch_count_to_precision = matmul_batch_count_to_precision
+        self.profile_every_batches = profile_every_batches
 
         self.samples_per_iteration = self.samples_per_batch * self.batches_per_iteration
         self.iteration_count = 0
@@ -131,9 +143,11 @@ class AudioTrainer:
         self.samples_processed_since_last_log = 0
         self.batches_count = 0
         self.batches_since_last_validation = 0
-        self.batches_since_last_save = 0
-        self.batches_since_last_send_audio_clips = 0
         self.batches_since_last_log = 0
+        self.batches_since_last_profile = 0
+
+        self.last_matmul_value = "highest"
+        # torch.set_float32_matmul_precision("highest")
 
     def train(self):
         self.train_start_time = time.time()
@@ -153,13 +167,12 @@ class AudioTrainer:
 
         print(f"Starting epoch {self.epoch_count}")
         epoch_finished = False
+        rotation_count = 0
         while not epoch_finished:
             for model_config in self.models:
-                print(f"Model training rotation start for {model_config.name} @ epoch {self.epoch_count}")
+                print(f"Model training rotation {rotation_count} start for {model_config.name} @ epoch {self.epoch_count}")
                 self.samples_processed_since_last_log = 0
                 self.iteration_count += 1
-                self.batches_since_last_save = 0
-                self.batches_since_last_send_audio_clips = 0
                 self.batches_since_last_log = 0
                 iterations_since_step = 0
 
@@ -167,15 +180,25 @@ class AudioTrainer:
                 continue_training = True
                 while continue_training:
                     send_audio_clips = False
-                    if self.batches_since_last_send_audio_clips > self.send_audio_clip_every_batches:
+                    if model_config.batches_since_last_send_audio > self.send_audio_clip_every_batches:
                         send_audio_clips = True
-                        self.batches_since_last_send_audio_clips = 0
+                        model_config.batches_since_last_send_audio = 0
 
-                    should_log_extra_stuff = self.batches_since_last_log + self.batches_per_iteration > self.log_info_every_batches
+                    should_log_extra_stuff = self.batches_since_last_log + self.batches_per_iteration >= self.log_info_every_batches
                     should_step_optimizer = False
                     if iterations_since_step == self.step_every_iterations or self.step_every_iterations == 1:
                         iterations_since_step = 0
                         should_step_optimizer = True
+                    if self.matmul_batch_count_to_precision:
+                        for matmul_batch_limit, matmul_value in self.matmul_batch_count_to_precision.items():
+                            last_matmul_value = "highest"
+                            if model_config.batches_trained > matmul_batch_limit:
+                                last_matmul_value = matmul_value
+                    
+                    if self.matmul_batch_count_to_precision and self.last_matmul_value != last_matmul_value:
+                        self.last_matmul_value = last_matmul_value
+                        torch.set_default_tensor_type(matmul_value)
+
                     result = self.run_iteration(
                         model_config=model_config,
                         input_loader_iter=input_loader_iter,
@@ -188,14 +211,17 @@ class AudioTrainer:
                     )
                     model_batches_count_this_rotation += self.batches_per_iteration
                     model_config.batches_trained += self.batches_per_iteration
+                    model_config.batches_since_last_save += self.batches_per_iteration
+                    model_config.batches_since_last_send_audio += self.batches_per_iteration
+
                     iterations_since_step += 1
                     self.samples_processed += self.batches_per_iteration * self.samples_per_iteration
                     self.samples_processed_since_last_log += self.batches_per_iteration * self.samples_per_iteration
                     self.iteration_count += 1
                     self.batches_count += self.batches_per_iteration
                     self.batches_since_last_validation += self.batches_per_iteration
-                    self.batches_since_last_save += self.batches_per_iteration
-                    self.batches_since_last_send_audio_clips += self.batches_per_iteration
+                    self.batches_since_last_profile += self.batches_per_iteration
+
                     self.batches_since_last_log += self.batches_per_iteration
 
                     epoch_finished = not result.should_continue
@@ -212,14 +238,20 @@ class AudioTrainer:
                         self.batches_since_last_log = 0
                         self.summary_writer.flush()
 
-                    if self.batches_since_last_save > self.model_weights_save_every_batches:
+                    if model_config.batches_since_last_save >= self.model_weights_save_every_batches:
                         # Better to overwrite to avoid stacking up disk space.
                         model_save_path = self.model_weights_dir + f"/model_save_path_{model_config.name}-{self.training_date_str}"
                         model_config.writer.add_text(f"model_save_path_{model_config.name}", model_save_path, model_config.batches_trained)
                         if os.path.exists(model_save_path):
                             os.remove(model_save_path)
                         torch.save(model_config.model.state_dict(), model_save_path)
-                        self.batches_since_last_save = 0
+                        model_config.batches_since_last_save = 0
+                        
+                    if model_config.batches_trained >= self.stop_amp_after_batches:
+                        self.scaler = None
+                        self.use_scaler_dtype = None
+
+            rotation_count += 1
 
             if self.batches_since_last_validation >= self.validation_config.run_validation_every_batches:
                 print(f"Running validation @ epoch {self.epoch_count}")
@@ -260,6 +292,11 @@ class AudioTrainer:
             allow_mixed_precision: bool,
             is_validation: bool):
 
+        should_profile = not is_validation and self.profile_every_batches and self.batches_since_last_profile >= self.profile_every_batches
+        if should_profile:
+            self.batches_since_last_profile = 0
+            torch.cuda.memory._record_memory_history(max_entries=100000)
+
         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Data preparation ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
         writer_tag_prefix = "validation_" if is_validation else ""
@@ -293,10 +330,10 @@ class AudioTrainer:
         input_unsqueezed = input_subsamples.unsqueeze(dim=1)
         if self.scaler and allow_mixed_precision:
             with autocast("cuda", dtype=self.use_scaler_dtype):
-                prediction_raw = model(input_unsqueezed)
+                prediction_raw = self.run_model(input_unsqueezed, model_config, should_profile)
             prediction_raw = self.scaler.scale(prediction_raw)
         else:
-            prediction_raw = model(input_unsqueezed)
+            prediction_raw = self.run_model(input_unsqueezed, model_config, should_profile)
 
         if not self.training_classifier:
             prediction_raw = prediction_raw.squeeze(dim=1)
@@ -313,35 +350,81 @@ class AudioTrainer:
 
         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Loss calculation ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-        loss = self.loss_calculation(
-            golden_classifier_values,
-            golden_reconstructed,
-            model_config,
-            prediction,
-            should_log_extra_stuff,
-            writer_step,
-            writer_tag_prefix,
-            allow_mixed_precision)
+        if should_profile:
+            with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], record_shapes=True) as prof:
+                with record_function(f"profile_{model_config.name}_loss_and_optimize"):
+                    loss = self.loss_calculation(
+                        golden_classifier_values,
+                        golden_reconstructed,
+                        model_config,
+                        prediction,
+                        should_log_extra_stuff,
+                        writer_step,
+                        writer_tag_prefix,
+                        allow_mixed_precision)
 
-        del prediction
+                    del prediction
 
-        if not is_validation:
-            optimizer.zero_grad(set_to_none=True)
+                    if not is_validation:
+                        optimizer.zero_grad(set_to_none=True)
 
-            loss.backward()
-            del loss
+                        loss.backward()
+                        del loss
 
-            if should_step_optimizer:
+                        if self.scaler and allow_mixed_precision:
+                            self.scaler.unscale_(optimizer)  # Unscale before clipping
+
+                        if model_config.norm_clip:
+                            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=model_config.norm_clip)
+
+                        if should_step_optimizer:
+                            if self.scaler and allow_mixed_precision:
+                                self.scaler.step(optimizer)
+                                self.scaler.update()
+                            else:
+                                optimizer.step()
+
+                            if scheduler:
+                                scheduler.step()
+
+                        model.eval()
+        else:
+            # todo
+            loss = self.loss_calculation(
+                golden_classifier_values,
+                golden_reconstructed,
+                model_config,
+                prediction,
+                should_log_extra_stuff,
+                writer_step,
+                writer_tag_prefix,
+                allow_mixed_precision)
+
+            del prediction
+
+            if not is_validation:
+                optimizer.zero_grad(set_to_none=True)
+
+                loss.backward()
+                del loss
+
                 if self.scaler and allow_mixed_precision:
-                    self.scaler.step(optimizer)
-                    self.scaler.update()
-                else:
-                    optimizer.step()
+                    self.scaler.unscale_(optimizer)  # Unscale before clipping
 
-                if scheduler:
-                    scheduler.step()
+                if model_config.norm_clip:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=model_config.norm_clip)
 
-            model.eval()
+                if should_step_optimizer:
+                    if self.scaler and allow_mixed_precision:
+                        self.scaler.step(optimizer)
+                        self.scaler.update()
+                    else:
+                        optimizer.step()
+
+                    if scheduler:
+                        scheduler.step()
+
+                model.eval()
 
         if should_record_audio_clips:
             self.record_prediction_audio_clips(model_config, prediction_cpu, prediction_raw, writer_step, writer_tag_prefix)
@@ -351,9 +434,23 @@ class AudioTrainer:
         if should_log_extra_stuff:
             self.log_extra_stuff(perf_iteration_start, model_config, writer_step, writer_tag_prefix)
 
+        if should_profile:
+            torch.cuda.memory._dump_snapshot(self.profile_output_dir)
+            torch.cuda.memory._record_memory_history(enabled=None)
+
         return IterationResult(
             should_continue=True,
         )
+
+    def run_model(self, input_data: torch.Tensor, model_config: AudioModelTrainingConfig, should_profile: bool):
+        if should_profile:
+            with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], record_shapes=True) as prof:
+                with record_function(f"profile_{model_config.name}"):
+                    model_output = model_config.model(input_data)
+            self.summary_writer.add_text(f"{model_config.name}_profiling", prof.key_averages().table(sort_by="cuda_time_total", row_limit=20), model_config.batches_trained)
+        else:
+            model_output = model_config.model(input_data)
+        return model_output
 
     def log_extra_stuff(self, perf_iteration_start, model_config, writer_step, writer_tag_prefix):
         perf_iteration_end = time.perf_counter()
@@ -417,6 +514,17 @@ class AudioTrainer:
                 loss = loss_out_weighted
 
         if should_log_extra_stuff:
+            total_norm = 0
+            for p in model_config.model.parameters():
+                if p.grad is not None:
+                    param_norm = p.grad.data.norm(2)  # Calculate L2 norm
+                    total_norm += param_norm.item() ** 2
+                    # if should_log_extra_stuff:
+                    #     model_config.writer.add_scalar(f"Gradients/{model_config.name}/{p.grad.data.norm}", param_norm,
+                    #                                    writer_step)  # Log individual parameter gradient norms
+            total_norm = total_norm ** 0.5
+            model_config.writer.add_scalar(f"{writer_tag_prefix}total_grad_norm", total_norm, writer_step)
+
             model_config.writer.add_scalar(f"{writer_tag_prefix}loss_total", loss.item(), writer_step)
 
         return loss
@@ -465,8 +573,6 @@ class AudioTrainer:
         return input_subsamples, golden_reconstructed, golden_classifier_values
 
     def run_validation(self):
-        self.batches_since_last_send_audio_clips = 0
-
         for model_config in self.models:
             model_batches_count = 0
             continue_eval = True
@@ -474,9 +580,9 @@ class AudioTrainer:
             iterations_since_step = 0
             while continue_eval:
                 send_audio_clips = False
-                if self.batches_since_last_send_audio_clips > self.send_audio_clip_every_batches != 0:
+                if model_config.batches_since_last_send_audio > self.send_audio_clip_every_batches != 0:
                     send_audio_clips = True
-                    self.batches_since_last_send_audio_clips = 0
+                    model_config.batches_since_last_send_audio = 0
                 
                 should_log_extra_stuff = self.batches_since_last_log + self.batches_per_iteration > self.validation_config.log_every_batches
                 should_step_optimizer = False
@@ -497,7 +603,7 @@ class AudioTrainer:
                 model_config.batches_validated += self.batches_per_iteration
                 model_batches_count += self.batches_per_iteration
                 iterations_since_step += 1
-                self.batches_since_last_send_audio_clips += self.batches_per_iteration
+                model_config.batches_since_last_send_audio += self.batches_per_iteration
                 self.batches_since_last_log += self.batches_per_iteration
 
                 if should_log_extra_stuff:

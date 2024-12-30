@@ -17,7 +17,7 @@ class ConvBlock1D(nn.Module):
     def __init__(self, name, in_channels, out_channels, device, dtype, num_blocks=2, last_layer=False):
         super(ConvBlock1D, self).__init__()
 
-        print(f"ConvBlock1D {name} in_channels: {in_channels} out_channels: {out_channels}")
+        # print(f"ConvBlock1D {name} in_channels: {in_channels} out_channels: {out_channels}")
 
         self.sequential = nn.Sequential(
             nn.Conv1d(in_channels=in_channels,

@@ -26,7 +26,7 @@ class NoisyCommonsDataset(Dataset):
             # Opus always decodes at 48khz, bc torchaudio doesn't support passing input sample rate to decoder in ffmpeg
             self.resampler = torchaudio.transforms.Resample(orig_freq=48000, new_freq=self.sample_rate).to(device)
 
-        with open(f"{base_dir}/samples.csv") as csvfile:
+        with open(f"{base_dir}/{csv_filename}") as csvfile:
             fieldnames = ['path', 'sentence_id']
             samples_reader = csv.DictReader(csvfile, fieldnames=fieldnames)
             self.sample_infos = list(samples_reader)
@@ -50,7 +50,5 @@ class NoisyCommonsDataset(Dataset):
                 audio_aggregated = torch.cat((audio_aggregated, audio), dim=1)
 
         audio_samples = torch.stack(audio_aggregated.split(self.sample_size, dim=1))
-
-
 
         return audio_samples

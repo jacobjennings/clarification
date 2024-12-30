@@ -40,32 +40,37 @@ class CommonVoiceLoader:
         self.train_dataset = noisy_dataset.NoisyCommonsDataset(
             batch_size=self.dataset_batch_size, 
             device=self.device, 
-            base_dir=self.base_dir,
+            base_dir=self.base_dir + "/train",
             csv_filename="train.csv")
         
         self.test_dataset = noisy_dataset.NoisyCommonsDataset(
             batch_size=self.dataset_batch_size, 
             device=self.device, 
-            base_dir=self.base_dir,
+            base_dir=self.base_dir + "/test",
             csv_filename="test.csv")
 
-        loader_generator = torch.Generator()
+        train_generator = torch.Generator()
 
         if self.summary_writer:
             self.summary_writer.add_text("CommonVoiceLoader",
-                                         f"loader_generator seed: {loader_generator.initial_seed()}")
+                                         f"train_generator seed: {train_generator.initial_seed()}")
 
         train_loader = DataLoader(
             self.train_dataset,
             batch_size=self.loader_batch_size,
-            generator=loader_generator,
+            generator=train_generator,
             num_workers=self.num_workers
         )
+
+        # Keep fixed seed for test set for reproducibility. TODO: english only version
+        test_generator = torch.Generator()
+        test_generator.manual_seed(314)
 
         test_loader = DataLoader(
             self.test_dataset,
             batch_size=self.loader_batch_size,
-            num_workers=self.num_workers
+            generator=test_generator,
+            num_workers=self.num_workers,
         )
 
         self.train_loader = train_loader

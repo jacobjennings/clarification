@@ -41,11 +41,11 @@ class ClarificationDenseLSTM(nn.Module):
         
         # lstm_input_channel_size = layer_sizes[len(layer_sizes) // 2] // 8
         
-        print(f"times_dim: {time_dim}")
+        # print(f"times_dim: {time_dim}")
         self.lstm_conv = nn.Conv1d(in_channels=layer_sizes[len(layer_sizes) // 2], 
                                    out_channels=lstm_channel_size, kernel_size=4, stride=16, padding=0, bias=False)
         lstm_input_size = math.ceil(time_dim / 16)
-        print(f"lstm_input_size: {lstm_input_size}")
+        # print(f"lstm_input_size: {lstm_input_size}")
         
         self.lstm = nn.LSTM(input_size=lstm_input_size, hidden_size=hidden_size_multiplier * lstm_input_size,
                             num_layers=1, batch_first=True, device=device, dtype=dtype)
@@ -63,7 +63,7 @@ class ClarificationDenseLSTM(nn.Module):
                         layer_num=i)
             self.up_layers.add_module("up_" + str(i), up)
 
-        print(f"Out layer: in_channels: {layer_sizes[-1]} out_channels: 1")
+        # print(f"Out layer: in_channels: {layer_sizes[-1]} out_channels: 1")
         self.last_layer = OutLayer(
             name=f"{name}_outlayer",
             in_channels=sum(output_sizes),
