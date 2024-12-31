@@ -1,0 +1,35 @@
+        # dense_maker("dense2", [48, 96, 192, 96, 48]),
+        # dense_maker("dense1", [32, 64, 128, 64, 32]),
+        # dense_maker("dense3", [64, 128, 256, 128, 64])
+
+        # dense_maker("dense6", [128, 196, 256, 196, 128], start_factor=0.03, end_factor=0.006, iters=1000000),
+        # dense_lstm_maker("denselstm7", [256, 320, 384, 320, 256]),
+        # dense_maker("dense9", [192, 256, 320, 256, 192]),
+        # dense_lstm_maker("denselstm6", [128, 196, 256, 196, 128], milestones=[(0, 0.00001)], batches_per_model_rotation=15000),
+        # dense_maker("dense7", [256, 320, 384, 320, 256], start_factor=0.03, end_factor=0.006, iters=1000000)
+        # dense_maker("dense8", [256, 512, 1024, 512, 256])
+        # dense_lstm_maker("denselstm8", [128, 128, 128, 128, 128])
+
+        # dense_maker("dense10", [96, 96, 96, 96, 96], milestones=[(0, 0.01), (500000, 0.00001)], batches_per_model_rotation=30000),
+
+        # dense_maker("dense80k-1", [72, 64, 72], milestones=[(0, 0.01), (500000, 0.00001)], batches_per_model_rotation=30000),
+        # dense_maker("dense80k-2", [64, 80, 64], milestones=[(0, 0.01), (500000, 0.00001)], batches_per_model_rotation=30000),
+        # dense_maker("dense80k-3", [64, 96, 64], milestones=[(0, 0.01), (500000, 0.00001)], batches_per_model_rotation=30000), # winner
+        # dense_maker("dense80k-4", [40, 40, 40, 40, 40], milestones=[(0, 0.01), (500000, 0.00001)], batches_per_model_rotation=30000),
+        # dense_maker("dense80k-5", [16, 48, 80, 48, 16], milestones=[(0, 0.01), (500000, 0.00001)], batches_per_model_rotation=30000),
+
+        # dense_maker("dense160k-1", [8, 72, 136, 72, 8], milestones=[(0, 0.01), (500000, 0.00001)], batches_per_model_rotation=30000),
+        # dense_maker("dense160k-2", [16, 48, 80, 48, 16], milestones=[(0, 0.01), (500000, 0.00001)], batches_per_model_rotation=30000), # winner
+
+        # 250k class        
+        # Dense Params: 2648640 Dense Layers: [176, 160, 144, 128, 144, 160, 176]
+        # Dense Params: 2545848 Dense Layers: [152, 152, 152, 152, 152, 152, 152]
+        # Dense Params: 2713240 Dense Layers: [136, 152, 168, 184, 168, 152, 136]
+        
+        # dense_maker("dense250k-1", [176, 160, 144, 128, 144, 160, 176], milestones=[(0, 0.01), (500000, 0.000001)], batches_per_model_rotation=30000),
+        # dense_maker("dense250k-2", [152, 152, 152, 152, 152, 152, 152], milestones=[(0, 0.01), (500000, 0.000001)], batches_per_model_rotation=30000),
+        # dense_maker("dense250k-3", [136, 152, 168, 184, 168, 152, 136], milestones=[(0, 0.01), (500000, 0.000001)], batches_per_model_rotation=30000),
+
+        # dense_maker("dense-fight-resnet1", [32, 48, 80, 48, 32], milestones=[(0, 0.01), (500000, 0.000001)], batches_per_model_rotation=15000),
+        # res_maker("resnet1", 96, 6, milestones=[(0, 0.01), (500000, 0.000001)], batches_per_model_rotation=15000), # winner at -12.5ish
+

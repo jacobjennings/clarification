@@ -120,7 +120,7 @@ def calculate_layers():
     for i in range(20000, 100000, 20000):
         target_sizes.append(i)
 
-    for i in range(150000, 500000, 50000):
+    for i in range(100000, 500000, 50000):
         target_sizes.append(i)
 
     for i in range(600000, 1000000, 100000):

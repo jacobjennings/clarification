@@ -4,3 +4,4 @@ from .clarification_lstm import *
 from .clarification_configurable_lstm import *
 from .clarification_dense import *
 from .clarification_dense_lstm import *
+from .clarification_resnet import *
