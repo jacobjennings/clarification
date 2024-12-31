@@ -4,7 +4,9 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as nnF
+import logging
 
+logger = logging.getLogger(__name__)
 from ..modules import OutLayer, Down, ConvBlock1D, UpNoCat
 
 

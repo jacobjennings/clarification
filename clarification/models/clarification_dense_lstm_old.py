@@ -1,5 +1,7 @@
 """1D u-net with dense LSTM connections between blocks."""
+import logging
 
+logger = logging.getLogger(__name__)
 import torch
 import torch.nn as nn
 import torch.nn.functional as nnF

@@ -1,5 +1,7 @@
 """1D u-net."""
+import logging
 
+logger = logging.getLogger(__name__)
 import torch.nn as nn
 import torch.nn.functional as nnF
 
@@ -7,7 +9,7 @@ from ..modules import OutLayer, Down, ConvBlock1D, Up
 
 
 class ClarificationSimple(nn.Module):
-    def __init__(self, name, in_channels, device, dtype, layer_sizes=None, invert=False, num_output_convblocks=2):
+    def __init__(self, name, device, dtype, layer_sizes=None, invert=False, num_output_convblocks=2):
         super(ClarificationSimple, self).__init__()
 
         if len(layer_sizes) % 2 == 0:
@@ -17,13 +19,11 @@ class ClarificationSimple(nn.Module):
         if layer_sizes is None:
             layer_sizes = [64, 128, 256, 512, 1024]
 
-        self.first_layer = ConvBlock1D(name=f"{name}_firstlayer_conv", in_channels=in_channels, out_channels=layer_sizes[0], device=device, dtype=dtype)
-        # print(f"First layer: in_channels: {in_channels} out_channels: {layer_sizes[0]}")
+        self.first_layer = ConvBlock1D(name=f"{name}_firstlayer_conv", in_channels=1, out_channels=layer_sizes[0], device=device, dtype=dtype)
 
         self.down_layers = nn.ModuleList()
         for i in range(len(layer_sizes) // 2):
             down = Down(name=f"{name}_down_{i}", in_channels=layer_sizes[i], out_channels=layer_sizes[i + 1], device=device, dtype=dtype)
-            # print(f"Down layer {i} in_channels: {layer_sizes[i]} out_channels: {layer_sizes[i + 1]}")
             self.down_layers.add_module("down_" + str(i), down)
 
         layer_sizes_len = len(layer_sizes)
@@ -37,7 +37,6 @@ class ClarificationSimple(nn.Module):
                     out_channels=out_channels,
                     device=device, dtype=dtype,
                     layer_num=i)
-            # print(f"Up layer {i} in_channels: {a_in_channels} out_channels: {out_channels}")
             self.up_layers.add_module("up_" + str(i), up)
 
         print(f"Out layer: in_channels: {layer_sizes[-1]} out_channels: 1")

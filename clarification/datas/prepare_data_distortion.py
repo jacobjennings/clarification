@@ -11,7 +11,9 @@ import multiprocessing
 import itertools
 import csv
 import pathlib
+import logging
 
+logger = logging.getLogger(__name__)
 import h5py
 
 from ipywidgets import IntProgress

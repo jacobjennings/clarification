@@ -1,6 +1,8 @@
 """Up layers for 1d u-net"""
 import math
+import logging
 
+logger = logging.getLogger(__name__)
 import torch
 import torch.nn as nn
 import torch.nn.functional as nnF

@@ -1,5 +1,8 @@
 """Final layer for 1D u-net"""
 
+import logging
+
+logger = logging.getLogger(__name__)
 import torch.nn as nn
 
 from .conv_block import ConvBlock1D

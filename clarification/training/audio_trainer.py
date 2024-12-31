@@ -1,321 +1,207 @@
-import gc
 import os
 import pathlib
 import time
 import pprint
-import functools
+import logging
 
-from dataclasses import dataclass
-from typing import List, Optional
-
-import torch
-import torch.nn as nn
-import torch.optim as optim
+logger = logging.getLogger(__name__)
 import torch.utils.checkpoint
-from torch.utils.data import DataLoader
-from torch.utils.tensorboard import SummaryWriter
+from torch.cpu.amp import GradScaler
 from torch.amp import autocast
 from torch.profiler import profile, record_function, ProfilerActivity
+from pathlib import Path
 
 from ..util import better_split_discard_remainder
+from .data_classes import *
 
-@dataclass
-class AudioModelTrainingConfig:
-    name: str
-    model: nn.Module
-    actual_model: nn.Module # If using a wrapper like DataParallel, set this to the actual model
-    optimizer: optim.Optimizer
-    scheduler: Optional[optim.lr_scheduler.LRScheduler]
-    batches_per_model_rotation: int
-    writer: SummaryWriter
-    batches_trained: int = 0
-    batches_validated: int = 0
-    batches_since_last_save = 0
-    batches_since_last_send_audio = 0
-    norm_clip: float | None = 1.5
-    
-@dataclass
-class AudioLossFunctionConfig:
-    name: str
-    weight: float
-    fn: nn.Module
-    is_unary: bool
-    batch_size: Optional[int]
-    
-@dataclass
-class ValidationConfig:
-    test_loader: DataLoader
-    test_batches: int
-    run_validation_every_batches: int
-    log_every_batches: int = 5000
-    
-@dataclass
-class IterationResult:
-    # pylint: disable=missing-class-docstring
-    should_continue: bool
 
 class AudioTrainer:
-    def __init__(
-            self,
-            input_dataset_loader: DataLoader,
-            models: List[AudioModelTrainingConfig],
-            loss_function_configs: List[AudioLossFunctionConfig],
-            sample_rate: int,
-            samples_per_batch: int,
-            batches_per_iteration: int,
-            dataset_batch_size: int,
-            device: str,
-            overlap_samples: int,
-            training_date_str: str,
-            model_weights_dir: Optional[str] = None,
-            model_weights_save_every_batches: int = 100000,
-            profile_output_dir: Optional[str] = None,
-            summary_writer: Optional[SummaryWriter] = None,
-            send_audio_clip_every_batches: int = 45000,
-            log_info_every_batches: int = 15000,
-            step_every_iterations: int = 1,
-            dataset_batches_length: int = None,
-            training_classifier: bool = False,
-            validation_config: Optional[ValidationConfig] = None,
-            use_scaler_dtype = None,
-            amp_loss_scalar: float = 0.1,
-            stop_amp_after_batches = 300000,
-            matmul_batch_count_to_precision: dict[int, str] = None,
-            profile_every_batches: int | None = 50000,
-
-    ):
+    def __init__(self, config: AudioTrainerConfig):
         """Training loop for audio.
         
         Args:
-            input_dataset_loader: DataLoader.
-            models: List of AudioModelTrainingConfig.
-            loss_function_configs: List of AudioLossFunctionConfig.
-            sample_rate: Sample rate of audio.
-            samples_per_batch: Number of samples per batch. This should match the model's expectations.
-            batches_per_iteration: Number of batches to train on per iteration. Increase until you run into OOMs for training speed.
-            dataset_batch_size: Batch size that comes from dataset. This will be continuous speed without interruption
-            device: Device to train on.
-            overlap_samples: Number of samples to overlap between batches.
-            model_weights_dir: Directory to save model weights to. If not specified, weights are not saved.
-            model_weights_save_every_batches: Save model weights every n iterations. If not specified, weights are not saved.
-            summary_writer: SummaryWriter for logging to tensorboard. If not specified, no logging is done.
-            send_audio_clip_every_batches: Send audio clips to tensorboard every n
-            log_info_every_batches: Log extra info every n batches.
-            step_every_iterations: Step optimizer every n iterations.
-            dataset_batches_length: Length of batches expected from the dataset
-            training_classifier: If true, this is a classifier model. Data is expected to be a tuple of ([batches, channels, samples], [batches, labels]).
-            validation_config: ValidationConfig.
-            use_scaler_dtype: Use mixed precision training.
-            amp_loss_scalar: Loss scalar for mixed precision training. For some reason, loss values tend to explode, so this is a way to counteract that.
-
+            config: Configuration for the audio trainer.
+                See clarification.training.[data_classes.py].AudioTrainerConfig.
         """
-        self.input_dataset_loader = input_dataset_loader
-        self.models = models
-        self.loss_function_configs = loss_function_configs
-        self.sample_rate = sample_rate
-        self.samples_per_batch = samples_per_batch
-        self.batches_per_iteration = batches_per_iteration
-        self.dataset_batch_size = dataset_batch_size
-        self.device = device
-        self.overlap_samples = overlap_samples
-        self.model_weights_dir = model_weights_dir
-        self.model_weights_save_every_batches = model_weights_save_every_batches
-        self.profile_output_dir = profile_output_dir
-        self.summary_writer = summary_writer
-        self.send_audio_clip_every_batches = send_audio_clip_every_batches
-        self.dataset_batches_length = dataset_batches_length
-        self.training_classifier = training_classifier
-        self.validation_config = validation_config
-        self.step_every_iterations = step_every_iterations
-        self.training_date_str = training_date_str
-        self.use_scaler_dtype = use_scaler_dtype
-        self.scaler = torch.amp.GradScaler("cuda") if use_scaler_dtype else None
-        self.amp_loss_scalar = amp_loss_scalar
-        self.stop_amp_after_batches = stop_amp_after_batches
-        self.matmul_batch_count_to_precision = matmul_batch_count_to_precision
-        self.profile_every_batches = profile_every_batches
 
-        self.samples_per_iteration = self.samples_per_batch * self.batches_per_iteration
-        self.iteration_count = 0
-        self.epoch_start_time = None
-        self.epoch_count = 0
-        self.samples_processed = 0
-        self.train_start_time = None
-        self.log_info_every_batches = log_info_every_batches
-        self.last_samples_processed_log_time = time.time()
-        self.samples_processed_since_last_log = 0
-        self.batches_count = 0
-        self.batches_since_last_validation = 0
-        self.batches_since_last_log = 0
-        self.batches_since_last_profile = 0
+        self.c = config
+        # Shorthand
+        self.s = config.state
+        self.m = config.model_training_config
+        self.d = config.model_training_config.dataset_config
+        self.l = config.log_behavior_config
+        self.w = config.log_behavior_config.writer
 
-        self.last_matmul_value = "highest"
-        # torch.set_float32_matmul_precision("highest")
+        if self.m.mixed_precision_config.use_scaler_dtype:
+            self.scaler = GradScaler()
 
-    def train(self):
-        self.train_start_time = time.time()
+        # model_dict_path = models_dir + "/dense4-20241222-184328"
+        # model = models[0][1]
+        # model.load_state_dict(torch.load(model_dict_path, weights_only=True))
+        # model.eval()
 
-        gc.collect()
-        torch.cuda.empty_cache()
+    def train_one_rotation(self):
+        if self.s.data_loader_iter is None:
+            self.s.data_loader_iter = iter(self.d.input_dataset_loader)
 
+        if self.s.train_start_time is None:
+            self.s.train_start_time = time.time()
+
+        if self.s.epoch_start_time is None:
+            self.s.epoch_start_time = time.time()
+
+        print(f"Model training rotation {self.s.rotation_count} start for {self.m.name} @ epoch {self.s.epoch_count}")
+
+        iterations_since_step = 0
+        batch_count_this_rotation = 0
+
+        # Loop iterations until batches_per_model_rotation is reached.
         while True:
-            self.train_epoch()
-            self.epoch_count += 1
-            self.summary_writer.add_scalar("epoch", self.epoch_count, self.batches_count)
+            send_audio_clips = False
+            if self.s.batches_since_last_send_audio > self.l.send_audio_clip_every_batches:
+                send_audio_clips = True
+                self.s.batches_since_last_send_audio = 0
 
-    def train_epoch(self):
-        self.epoch_start_time = time.time()
+            should_log_extra_stuff = self.s.batches_since_last_log + self.d.batches_per_iteration >= self.l.log_info_every_batches
 
-        input_loader_iter = iter(self.input_dataset_loader)
-
-        print(f"Starting epoch {self.epoch_count}")
-        epoch_finished = False
-        rotation_count = 0
-        while not epoch_finished:
-            for model_config in self.models:
-                print(f"Model training rotation {rotation_count} start for {model_config.name} @ epoch {self.epoch_count}")
-                self.samples_processed_since_last_log = 0
-                self.iteration_count += 1
-                self.batches_since_last_log = 0
+            should_step_optimizer = False
+            if iterations_since_step == self.m.step_every_iterations or self.m.step_every_iterations == 1:
                 iterations_since_step = 0
+                should_step_optimizer = True
 
-                model_batches_count_this_rotation = 0
-                continue_training = True
-                while continue_training:
-                    send_audio_clips = False
-                    if model_config.batches_since_last_send_audio > self.send_audio_clip_every_batches:
-                        send_audio_clips = True
-                        model_config.batches_since_last_send_audio = 0
+            furthest_matmul_value = "highest"
+            if self.m.mixed_precision_config.matmul_batch_count_to_precision:
+                for matmul_batch_limit, matmul_value in self.m.mixed_precision_config.matmul_batch_count_to_precision.items():
+                    if self.s.batches_trained > matmul_batch_limit:
+                        furthest_matmul_value = matmul_value
 
-                    should_log_extra_stuff = self.batches_since_last_log + self.batches_per_iteration >= self.log_info_every_batches
-                    should_step_optimizer = False
-                    if iterations_since_step == self.step_every_iterations or self.step_every_iterations == 1:
-                        iterations_since_step = 0
-                        should_step_optimizer = True
-                    if self.matmul_batch_count_to_precision:
-                        for matmul_batch_limit, matmul_value in self.matmul_batch_count_to_precision.items():
-                            last_matmul_value = "highest"
-                            if model_config.batches_trained > matmul_batch_limit:
-                                last_matmul_value = matmul_value
-                    
-                    if self.matmul_batch_count_to_precision and self.last_matmul_value != last_matmul_value:
-                        self.last_matmul_value = last_matmul_value
-                        torch.set_default_tensor_type(matmul_value)
+            if self.m.mixed_precision_config.matmul_batch_count_to_precision and self.s.last_matmul_value != furthest_matmul_value:
+                self.s.last_matmul_value = furthest_matmul_value
+                torch.set_default_tensor_type(furthest_matmul_value)
 
-                    should_profile = self.profile_every_batches and self.batches_since_last_profile >= self.profile_every_batches
-                    if should_profile:
-                        self.batches_since_last_profile = 0
-                        torch.cuda.memory._record_memory_history(max_entries=100000)
+            should_profile = self.l.profile_every_batches and self.s.batches_since_last_profile >= self.l.profile_every_batches
+            if should_profile:
+                self.s.batches_since_last_profile = 0
+                torch.cuda.memory._record_memory_history(max_entries=100000)
 
-                        with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], record_shapes=True) as prof:
-                            with record_function(f"profile_{model_config.name}_iteration"):
-                                result = self.run_iteration(
-                                    model_config=model_config,
-                                    input_loader_iter=input_loader_iter,
-                                    should_record_audio_clips=send_audio_clips,
-                                    should_log_extra_stuff=should_log_extra_stuff,
-                                    writer_step=model_config.batches_trained,
-                                    should_step_optimizer=should_step_optimizer,
-                                    allow_mixed_precision=True,
-                                    is_validation=False,
-                                )
-                        torch.cuda.memory._dump_snapshot(self.profile_output_dir)
-                        torch.cuda.memory._record_memory_history(enabled=None)
-
-                    else:
-                        result = self.run_iteration(
-                            model_config=model_config,
-                            input_loader_iter=input_loader_iter,
+                with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], record_shapes=True) as prof:
+                    with record_function(f"profile_{self.m.name}_iteration"):
+                        self.run_iteration(
                             should_record_audio_clips=send_audio_clips,
                             should_log_extra_stuff=should_log_extra_stuff,
-                            writer_step=model_config.batches_trained,
+                            writer_step=self.s.batches_trained,
                             should_step_optimizer=should_step_optimizer,
                             allow_mixed_precision=True,
-                            is_validation=False
+                            is_validation=False,
                         )
 
-                    model_batches_count_this_rotation += self.batches_per_iteration
-                    model_config.batches_trained += self.batches_per_iteration
-                    model_config.batches_since_last_save += self.batches_per_iteration
-                    model_config.batches_since_last_send_audio += self.batches_per_iteration
+                profiling_file_path = f"{self.l.profiling_data_output_dir}/profile_{self.c.training_date_str}_{self.m.name}"
+                Path(profiling_file_path).mkdir(parents=True, exist_ok=True)
+                torch.cuda.memory._dump_snapshot(self.l.profiling_data_output_dir + "/profile_" + self.m.name)
+                torch.cuda.memory._record_memory_history(enabled=None)
 
-                    iterations_since_step += 1
-                    self.samples_processed += self.batches_per_iteration * self.samples_per_iteration
-                    self.samples_processed_since_last_log += self.batches_per_iteration * self.samples_per_iteration
-                    self.iteration_count += 1
-                    self.batches_count += self.batches_per_iteration
-                    self.batches_since_last_validation += self.batches_per_iteration
-                    self.batches_since_last_profile += self.batches_per_iteration
+            else:
+                self.run_iteration(
+                    should_record_audio_clips=send_audio_clips,
+                    should_log_extra_stuff=should_log_extra_stuff,
+                    writer_step=self.s.batches_trained,
+                    should_step_optimizer=should_step_optimizer,
+                    allow_mixed_precision=True,
+                    is_validation=False
+                )
 
-                    self.batches_since_last_log += self.batches_per_iteration
+            bpi = self.d.batches_per_iteration
+            batch_count_this_rotation += bpi
+            iterations_since_step += 1
 
-                    epoch_finished = not result.should_continue
-                    continue_training = result.should_continue and model_batches_count_this_rotation < model_config.batches_per_model_rotation
+            self.s.batches_trained += bpi
+            self.s.batches_since_last_save += bpi
+            self.s.batches_since_last_send_audio += bpi
+            self.s.samples_processed += bpi * self.d.samples_per_iteration
+            self.s.samples_processed_since_last_log += bpi * self.d.samples_per_iteration
+            self.s.iteration_count += 1
+            self.s.batches_since_last_validation += bpi
+            self.s.batches_since_last_profile += bpi
+            self.s.batches_since_last_log += bpi
 
-                    if self.batches_since_last_log > self.log_info_every_batches:
-                        elapsed_training_time = time.time() - self.train_start_time
-                        elapsed_time_since_logged_samples_processed = time.time() - self.last_samples_processed_log_time
+            if self.s.batches_since_last_log > self.l.log_info_every_batches:
+                elapsed_training_time = time.time() - self.s.train_start_time
+                elapsed_time_since_logged_samples_processed = time.time() - self.s.last_samples_processed_log_time
 
-                        self.log_post_iteration_stuff(elapsed_time_since_logged_samples_processed, elapsed_training_time, model_config)
+                self.log_post_iteration_stuff(elapsed_time_since_logged_samples_processed, elapsed_training_time)
 
-                        self.last_samples_processed_log_time = time.time()
-                        self.samples_processed_since_last_log = 0
-                        self.batches_since_last_log = 0
-                        self.summary_writer.flush()
+                self.s.last_samples_processed_log_time = time.time()
+                self.s.samples_processed_since_last_log = 0
+                self.s.batches_since_last_log = 0
+                self.w.flush()
 
-                    if model_config.batches_since_last_save >= self.model_weights_save_every_batches:
-                        # Better to overwrite to avoid stacking up disk space.
-                        model_save_path = self.model_weights_dir + f"/model_save_path_{model_config.name}-{self.training_date_str}"
-                        model_config.writer.add_text(f"model_save_path_{model_config.name}", model_save_path, model_config.batches_trained)
-                        if os.path.exists(model_save_path):
-                            os.remove(model_save_path)
-                        torch.save(model_config.model.state_dict(), model_save_path)
-                        model_config.batches_since_last_save = 0
-                        
-                    if model_config.batches_trained >= self.stop_amp_after_batches:
-                        self.scaler = None
-                        self.use_scaler_dtype = None
+            if self.s.batches_since_last_save >= self.l.model_weights_save_every_batches:
+                # Better to overwrite to avoid stacking up disk space.
+                Path(self.l.model_weights_dir).mkdir(parents=True, exist_ok=True)
+                model_save_path = self.l.model_weights_dir + f"/weights-{self.c.training_date_str}-{self.m.name}"
+                self.w.add_text(f"model_save_path_{self.m.name}", model_save_path, self.s.batches_trained)
+                if os.path.exists(model_save_path):
+                    os.remove(model_save_path)
+                torch.save(self.m.actual_model.state_dict(), model_save_path)
+                self.s.batches_since_last_save = 0
 
-            rotation_count += 1
+            if self.s.batches_trained >= self.m.mixed_precision_config.stop_amp_after_batches:
+                self.s.scaler = None
+                self.m.mixed_precision_config.use_scaler_dtype = None
 
-            if self.batches_since_last_validation >= self.validation_config.run_validation_every_batches:
-                print(f"Running validation @ epoch {self.epoch_count}")
-
-                self.run_validation()
-                self.batches_since_last_validation = 0
-                
-            if epoch_finished:
+            if batch_count_this_rotation < self.m.batches_per_rotation:
                 break
 
+        self.s.rotation_count += 1
 
-    def log_post_iteration_stuff(self, elapsed_time_since_logged_samples_processed, elapsed_training_time, model_config):
-        self.summary_writer.add_scalar("samples_processed", self.samples_processed,
-                                       model_config.batches_trained)
-        model_config.writer.add_scalar("samples_processed_per_microsecond",
-                                       self.samples_processed_since_last_log / elapsed_time_since_logged_samples_processed / 1000 / 1000,
-                                       model_config.batches_trained)
-        model_config.writer.add_scalar("iterations_per_second",
-                                       self.iteration_count / elapsed_training_time,
-                                       model_config.batches_trained)
-        batches_complete = self.iteration_count * self.batches_per_iteration
+        if self.s.batches_since_last_validation >= self.m.validation_config.run_validation_every_batches:
+            print(f"Running validation for {self.m.name} @ rotation {self.s.rotation_count}")
+
+            self.run_validation()
+            self.s.batches_since_last_validation = 0
+
+    def memory_test_run(self):
+        for i in range(4):
+            self.run_iteration(
+                should_record_audio_clips=False,
+                should_log_extra_stuff=False,
+                writer_step=0,
+                should_step_optimizer=True,
+                allow_mixed_precision=False,
+                is_validation=False
+            )
+
+    def log_post_iteration_stuff(self, elapsed_time_since_logged_samples_processed, elapsed_training_time):
+        self.w.add_scalar("samples_processed", self.s.samples_processed,
+                          self.s.batches_trained)
+        self.w.add_scalar("samples_processed_per_microsecond",
+                          self.s.samples_processed_since_last_log / elapsed_time_since_logged_samples_processed / 1000 / 1000,
+                          self.s.batches_trained)
+        self.w.add_scalar("iterations_per_second",
+                          self.s.iteration_count / elapsed_training_time,
+                          self.s.batches_trained)
+        batches_complete = self.s.iteration_count * self.d.batches_per_iteration
         batches_per_second = batches_complete / elapsed_training_time
-        self.summary_writer.add_scalar("epoch_percentage_complete",
-                                       batches_complete / self.dataset_batches_length * 100,
-                                       model_config.batches_trained)
-        self.summary_writer.add_scalar("epoch_estimated_time_per_epoch_minutes",
-                                       self.dataset_batches_length / batches_per_second / 60,
-                                       model_config.batches_trained)
+        self.w.add_scalar("epoch_percentage_complete",
+                          batches_complete / self.d.dataset_batches_total_length * 100,
+                          self.s.batches_trained)
+        self.w.add_scalar("epoch_estimated_time_per_epoch_minutes",
+                          self.d.dataset_batches_total_length / batches_per_second / 60,
+                          self.s.batches_trained)
 
     def run_iteration(
             self,
-            model_config,
-            input_loader_iter,
             should_record_audio_clips: bool,
             should_log_extra_stuff: bool,
             writer_step: int,
             should_step_optimizer: bool,
             allow_mixed_precision: bool,
-            is_validation: bool):
+            is_validation: bool,
+            input_loader_iter=None
+    ):
+
+        if input_loader_iter is None:
+            input_loader_iter = self.s.data_loader_iter
 
         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Data preparation ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -330,19 +216,19 @@ class AudioTrainer:
 
         if should_log_extra_stuff and perf_iteration_start:
             perf_data_prep_end = time.perf_counter()
-            self.summary_writer.add_scalar(
+            self.w.add_scalar(
                 f"{writer_tag_prefix}perf_data_prep", perf_data_prep_end - perf_iteration_start, writer_step)
 
         if should_record_audio_clips:
-            self.record_noisy_clear_audio_clips(golden_reconstructed, input_subsamples, model_config, writer_step, writer_tag_prefix)
+            self.record_noisy_clear_audio_clips(golden_reconstructed, input_subsamples, writer_step, writer_tag_prefix)
 
         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Model training ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
         # torch.cuda.memory._record_memory_history(max_entries=100000)
 
-        model = model_config.model
-        optimizer = model_config.optimizer
-        scheduler = model_config.scheduler
+        model = self.m.model
+        optimizer = self.m.optimizer
+        scheduler = self.m.scheduler
 
         if is_validation:
             model.eval()
@@ -350,18 +236,18 @@ class AudioTrainer:
             model.train()
 
         input_unsqueezed = input_subsamples.unsqueeze(dim=1)
-        if self.scaler and allow_mixed_precision:
-            with autocast("cuda", dtype=self.use_scaler_dtype):
-                prediction_raw = self.run_model(input_unsqueezed, model_config)
+        if self.s.scaler and allow_mixed_precision:
+            with autocast("cuda", dtype=self.m.mixed_precision_config.use_scaler_dtype):
+                prediction_raw = self.run_model(input_unsqueezed)
             prediction_raw = self.scaler.scale(prediction_raw)
         else:
-            prediction_raw = self.run_model(input_unsqueezed, model_config)
+            prediction_raw = self.run_model(input_unsqueezed)
 
-        if not self.training_classifier:
+        if not self.m.training_classifier:
             prediction_raw = prediction_raw.squeeze(dim=1)
 
         prediction_cpu = None
-        if not self.training_classifier:
+        if not self.m.training_classifier:
             prediction = self.reconstruct_overlapping_samples_nofade(prediction_raw)
 
             if should_record_audio_clips:
@@ -369,7 +255,7 @@ class AudioTrainer:
 
         else:
             prediction = prediction_raw
-            
+
         # torch.cuda.empty_cache()
 
         # torch.cuda.memory._dump_snapshot(self.profile_output_dir)
@@ -384,7 +270,6 @@ class AudioTrainer:
         _, weighted_losses = self.loss_calculation(
             golden_classifier_values,
             golden_reconstructed,
-            model_config,
             prediction,
             should_log_extra_stuff,
             writer_step,
@@ -392,7 +277,7 @@ class AudioTrainer:
             allow_mixed_precision)
 
         del prediction
-        
+
         if not is_validation:
             optimizer.zero_grad(set_to_none=True)
 
@@ -401,21 +286,21 @@ class AudioTrainer:
             # print(f"Memory allocated: {torch.cuda.memory_allocated() / 1024 / 1024} MB")
             # print(f"Memory reserved: {torch.cuda.memory_reserved() / 1024 / 1024} MB")
             # print(f"Max memory allocated: {torch.cuda.max_memory_allocated() / 1024 / 1024} MB")
-            
+
             while weighted_losses:
                 loss = weighted_losses.pop()
-                loss.backward(retain_graph = len(weighted_losses) != 0)
+                loss.backward(retain_graph=len(weighted_losses) != 0)
                 del loss
                 # print("After backward")
                 # print(f"Memory allocated: {torch.cuda.memory_allocated() / 1024 / 1024} MB")
                 # print(f"Memory reserved: {torch.cuda.memory_reserved() / 1024 / 1024} MB")
                 # print(f"Max memory allocated: {torch.cuda.max_memory_allocated() / 1024 / 1024} MB")
-            
+
             if self.scaler and allow_mixed_precision:
                 self.scaler.unscale_(optimizer)  # Unscale before clipping
 
-            if model_config.norm_clip:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=model_config.norm_clip)
+            if self.m.norm_clip:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=self.m.norm_clip)
 
             if should_step_optimizer:
                 if self.scaler and allow_mixed_precision:
@@ -430,19 +315,14 @@ class AudioTrainer:
             model.eval()
 
         if should_record_audio_clips:
-            self.record_prediction_audio_clips(model_config, prediction_cpu, prediction_raw, writer_step, writer_tag_prefix)
+            self.record_prediction_audio_clips(prediction_cpu, prediction_raw, writer_step, writer_tag_prefix)
 
         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Log things to tensorboard ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
         if should_log_extra_stuff:
-            self.log_extra_stuff(perf_iteration_start, model_config, writer_step, writer_tag_prefix)
+            self.log_extra_stuff(perf_iteration_start, writer_step, writer_tag_prefix)
 
-        return IterationResult(
-            should_continue=True,
-        )
-        
-
-    def run_model(self, input_data: torch.Tensor, model_config: AudioModelTrainingConfig):
+    def run_model(self, input_data: torch.Tensor, model_config: AudioTrainerConfig):
         # def policy_fn(ctx, op, *args, **kwargs):
         #     return torch.utils.checkpoint.CheckpointPolicy.PREFER_RECOMPUTE
         #
@@ -452,9 +332,9 @@ class AudioTrainer:
         # outputs = None
         # initial_x = input_data
         #
-        # for i in range(model_config.model.checkpoint_count()):
+        # for i in range(self.m.model.checkpoint_count()):
         #     x, initial_x, outputs = torch.utils.checkpoint.checkpoint(
-        #         model_config.model.compute_checkpoint,
+        #         self.m.model.compute_checkpoint,
         #         x,
         #         initial_x,
         #         outputs,
@@ -462,76 +342,78 @@ class AudioTrainer:
         #         use_reentrant=False,
         #         context_fn=context_fn)
 
-        x = model_config.model(input_data)
+        x = self.m.model(input_data)
         return x
 
-    def log_extra_stuff(self, perf_iteration_start, model_config, writer_step, writer_tag_prefix):
+    def log_extra_stuff(self, perf_iteration_start, writer_step, writer_tag_prefix):
         perf_iteration_end = time.perf_counter()
-        model_config.writer.add_scalar(f"{writer_tag_prefix}perf_iteration",
-                                       perf_iteration_end - perf_iteration_start, writer_step)
+        self.w.add_scalar(f"{writer_tag_prefix}perf_iteration",
+                          perf_iteration_end - perf_iteration_start, writer_step)
 
-    def record_prediction_audio_clips(self, model_config, prediction_cpu, prediction_raw, writer_step, writer_tag_prefix):
-        if self.training_classifier:
-            model_config.writer.add_scalar(f"{writer_tag_prefix}classifier_prediction", prediction_raw.mean(),
-                                           writer_step),
+    def record_prediction_audio_clips(self, prediction_cpu, prediction_raw, writer_step, writer_tag_prefix):
+        if self.m.training_classifier:
+            self.w.add_scalar(f"{writer_tag_prefix}classifier_prediction", prediction_raw.mean(),
+                              writer_step),
         else:
             if prediction_cpu is not None:
-                model_config.writer.add_audio(f"{writer_tag_prefix}prediction_audio", prediction_cpu,
-                                              sample_rate=self.sample_rate, global_step=writer_step)
+                self.w.add_audio(f"{writer_tag_prefix}prediction_audio", prediction_cpu,
+                                 sample_rate=self.d.sample_rate, global_step=writer_step)
             else:
                 print("prediction_cpu is None!")
 
-    def loss_calculation(self, golden_classifier_values, golden_reconstructed, model_config, prediction,
+    def loss_calculation(self, golden_classifier_values, golden_reconstructed, prediction,
                          should_log_extra_stuff, writer_step, writer_tag_prefix, allow_mixed_precision):
         loss = None
         weighted_losses = []
-        for loss_config in self.loss_function_configs:
-            if self.training_classifier and prediction.size() != golden_classifier_values.size():
+        for loss_config in self.m.loss_function_configs:
+            if self.m.training_classifier and prediction.size() != golden_classifier_values.size():
                 print(
                     f"Wrong golden values size! prediction.size() = {prediction.size()} golden_classifier_values.size() = {golden_classifier_values.size()}")
 
-            goldens = golden_classifier_values if self.training_classifier else golden_reconstructed
+            goldens = golden_classifier_values if self.m.training_classifier else golden_reconstructed
 
             if loss_config.batch_size:
                 prediction = better_split_discard_remainder(prediction, loss_config.batch_size)
                 goldens = better_split_discard_remainder(goldens, loss_config.batch_size)
 
             if loss_config.is_unary:
-                if self.scaler and allow_mixed_precision:
-                    with autocast("cuda", dtype=self.use_scaler_dtype):
+
+                # TODO             next_input = next_input.view(-1, self.d.samples_per_batch * self.d.dataset_batch_size)
+                if self.s.scaler and allow_mixed_precision:
+                    with autocast("cuda", dtype=self.m.mixed_precision_config.use_scaler_dtype):
                         loss_out = loss_config.fn(prediction)
-                    loss_out = self.scaler.scale(loss_out)
+                    loss_out = self.s.scaler.scale(loss_out)
                 else:
                     loss_out = loss_config.fn(prediction)
                 loss_out = torch.mean(loss_out)
             else:
-                if self.scaler and allow_mixed_precision:
-                    with autocast("cuda", dtype=self.use_scaler_dtype):
+                if self.s.scaler and allow_mixed_precision:
+                    with autocast("cuda", dtype=self.m.mixed_precision_config.use_scaler_dtype):
                         loss_out = loss_config.fn(prediction, goldens)
-                    loss_out = self.scaler.scale(loss_out)
+                    loss_out = self.s.scaler.scale(loss_out)
                 else:
                     loss_out = loss_config.fn(prediction, goldens)
 
-            if self.scaler and allow_mixed_precision:
-                loss_out *= self.amp_loss_scalar
+            if self.s.scaler and allow_mixed_precision:
+                loss_out *= self.m.mixed_precision_config.amp_loss_scalar
 
             loss_out_weighted = loss_out * loss_config.weight
 
             if should_log_extra_stuff:
-                model_config.writer.add_scalar(f"{writer_tag_prefix}loss_weighted_{loss_config.name}",
-                                               loss_out_weighted.item(), writer_step)
-                model_config.writer.add_scalar(f"{writer_tag_prefix}loss_{loss_config.name}",
-                                               loss_out.item(), writer_step)
+                self.w.add_scalar(f"{writer_tag_prefix}loss_weighted_{loss_config.name}",
+                                  loss_out_weighted.item(), writer_step)
+                self.w.add_scalar(f"{writer_tag_prefix}loss_{loss_config.name}",
+                                  loss_out.item(), writer_step)
             if loss:
                 loss = loss + loss_out_weighted
             else:
                 loss = loss_out_weighted
-                
+
             weighted_losses.append(loss_out_weighted)
 
         if should_log_extra_stuff:
             total_norm = 0
-            for p in model_config.model.parameters():
+            for p in self.m.actual_model.parameters():
                 if p.grad is not None:
                     param_norm = p.grad.data.norm(2)  # Calculate L2 norm
                     total_norm += param_norm.item() ** 2
@@ -539,48 +421,49 @@ class AudioTrainer:
                     #     model_config.writer.add_scalar(f"Gradients/{model_config.name}/{p.grad.data.norm}", param_norm,
                     #                                    writer_step)  # Log individual parameter gradient norms
             total_norm = total_norm ** 0.5
-            model_config.writer.add_scalar(f"{writer_tag_prefix}total_grad_norm", total_norm, writer_step)
+            self.w.add_scalar(f"{writer_tag_prefix}total_grad_norm", total_norm, writer_step)
 
-            model_config.writer.add_scalar(f"{writer_tag_prefix}loss_total", loss.item(), writer_step)
+            self.w.add_scalar(f"{writer_tag_prefix}loss_total", loss.item(), writer_step)
 
         return loss, weighted_losses
 
-    def record_noisy_clear_audio_clips(self, golden_reconstructed, input_subsamples, model_config, writer_step, writer_tag_prefix):
+    def record_noisy_clear_audio_clips(self, golden_reconstructed, input_subsamples, model_config, writer_step,
+                                       writer_tag_prefix):
         noisy_audio = self.reconstruct_overlapping_samples_nofade(
-            input_subsamples.view(-1, self.samples_per_batch)).cpu().detach()
+            input_subsamples.view(-1, self.d.samples_per_batch)).cpu().detach()
         model_config.writer.add_audio(f"{writer_tag_prefix}noisy_audio", noisy_audio,
-                                      sample_rate=self.sample_rate, global_step=writer_step)
-        if not self.training_classifier:
+                                      sample_rate=self.d.sample_rate, global_step=writer_step)
+        if not self.m.training_classifier:
             clear_audio = golden_reconstructed.cpu().detach()
 
             model_config.writer.add_audio(f"{writer_tag_prefix}clear_audio", clear_audio,
-                                          sample_rate=self.sample_rate, global_step=writer_step)
+                                          sample_rate=self.d.sample_rate, global_step=writer_step)
 
     def iteration_data_prep(self, loader_iter):
         golden_classifier_values = None
-        if self.training_classifier:
+        if self.m.training_classifier:
             next_input, golden_classifier_values = next(loader_iter, None)
             if next_input is None:
-                return IterationResult(False)
+                self.reset_epoch()
+                next_input, golden_classifier_values = next(loader_iter, None)
 
-            next_input = next_input.view(-1, self.samples_per_batch * self.dataset_batch_size)
             golden_classifier_values = golden_classifier_values.mean(dim=1)
 
         else:
             next_input = next(loader_iter, None)
             if next_input is None:
-                return IterationResult(False)
+                self.reset_epoch()
+                next_input = next(loader_iter, None)
 
-            next_input = next_input.view(-1, 2, self.samples_per_batch)
+            next_input = next_input.view(-1, 2, self.d.samples_per_batch)
             next_input = next_input.squeeze(0).permute(1, 0, 2)
 
-
         input_subsamples = next_input.squeeze(0)
-        if not self.training_classifier:
+        if not self.m.training_classifier:
             input_subsamples = input_subsamples[0]
 
         golden_reconstructed = None
-        if not self.training_classifier:
+        if not self.m.training_classifier:
             golden_subsamples = next_input.squeeze(0)[1]
             golden_reconstructed = self.reconstruct_overlapping_samples_nofade(golden_subsamples)
 
@@ -588,60 +471,58 @@ class AudioTrainer:
 
         return input_subsamples, golden_reconstructed, golden_classifier_values
 
+    def reset_epoch(self):
+        self.s.data_loader_iter = iter(self.d.input_dataset_loader)
+
     def run_validation(self):
-        for model_config in self.models:
-            model_batches_count = 0
-            continue_eval = True
-            input_loader_iter = iter(self.validation_config.test_loader)
-            iterations_since_step = 0
-            while continue_eval:
-                send_audio_clips = False
-                if model_config.batches_since_last_send_audio > self.send_audio_clip_every_batches != 0:
-                    send_audio_clips = True
-                    model_config.batches_since_last_send_audio = 0
-                
-                should_log_extra_stuff = self.batches_since_last_log + self.batches_per_iteration > self.validation_config.log_every_batches
-                should_step_optimizer = False
-                if iterations_since_step == self.step_every_iterations or self.step_every_iterations == 1:
-                    iterations_since_step = 0
-                    should_step_optimizer = True
+        validation_batch_count = 0
+        input_loader_iter = iter(self.m.validation_config.test_loader)
+        iterations_since_step = 0
+        while True:
+            should_log_extra_stuff = (self.s.batches_since_last_log + self.d.batches_per_iteration
+                                      > self.m.validation_config.log_every_batches)
+            should_step_optimizer = False
+            if iterations_since_step == self.m.step_every_iterations or self.m.step_every_iterations == 1:
+                iterations_since_step = 0
+                should_step_optimizer = True
 
-                result = self.run_iteration(
-                    model_config=model_config,
-                    input_loader_iter=input_loader_iter,
-                    should_record_audio_clips=send_audio_clips,
-                    should_log_extra_stuff=should_log_extra_stuff,
-                    writer_step=model_config.batches_validated,
-                    should_step_optimizer=should_step_optimizer,
-                    allow_mixed_precision=False,
-                    is_validation=True
-                )
-                model_config.batches_validated += self.batches_per_iteration
-                model_batches_count += self.batches_per_iteration
-                iterations_since_step += 1
-                model_config.batches_since_last_send_audio += self.batches_per_iteration
-                self.batches_since_last_log += self.batches_per_iteration
+            self.run_iteration(
+                input_loader_iter=input_loader_iter,
+                should_record_audio_clips=False,
+                should_log_extra_stuff=should_log_extra_stuff,
+                writer_step=self.s.batches_validated,
+                should_step_optimizer=should_step_optimizer,
+                allow_mixed_precision=False,
+                is_validation=True
+            )
+            bpi = self.d.batches_per_iteration
 
-                if should_log_extra_stuff:
-                    self.batches_since_last_log = 0
+            iterations_since_step += 1
+            validation_batch_count += bpi
+            self.s.batches_validated += bpi
+            self.s.batches_since_last_log += bpi
 
-                continue_eval = result.should_continue and model_batches_count < self.validation_config.test_batches
+            if should_log_extra_stuff:
+                self.s.batches_since_last_log = 0
+
+            if validation_batch_count >= self.m.validation_config.test_batches:
+                break
 
     def reconstruct_overlapping_samples_nofade(self, samples: torch.Tensor):
         num_batches = samples.size()[0]
-        non_overlapping_size = self.samples_per_batch - self.overlap_samples * 2
+        non_overlapping_size = self.d.samples_per_batch - self.d.overlap_samples * 2
 
-        total_length = (num_batches * (self.samples_per_batch - self.overlap_samples)) - self.overlap_samples * 2
+        total_length = (num_batches * (self.d.samples_per_batch - self.d.overlap_samples)) - self.d.overlap_samples * 2
         output = torch.zeros(total_length, dtype=samples.dtype, device=samples.device)
 
-        output[:non_overlapping_size + self.overlap_samples] += samples[0][self.overlap_samples:]
+        output[:non_overlapping_size + self.d.overlap_samples] += samples[0][self.d.overlap_samples:]
 
         for idx, batch in enumerate(samples[1:-1]):
             idx = idx + 1
-            start = (idx * non_overlapping_size) + ((idx - 1) * self.overlap_samples)
-            end = start + non_overlapping_size + self.overlap_samples * 2
+            start = (idx * non_overlapping_size) + ((idx - 1) * self.d.overlap_samples)
+            end = start + non_overlapping_size + self.d.overlap_samples * 2
             output[start:end] = batch
 
-        output[-(non_overlapping_size + self.overlap_samples):] += samples[-1][:-self.overlap_samples]
+        output[-(non_overlapping_size + self.d.overlap_samples):] += samples[-1][:-self.d.overlap_samples]
 
         return output.unsqueeze(dim=0).unsqueeze(dim=0)

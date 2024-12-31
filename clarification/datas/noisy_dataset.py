@@ -1,5 +1,7 @@
 import csv
+import logging
 
+logger = logging.getLogger(__name__)
 import torch
 from torch.utils.data import Dataset
 

@@ -1,5 +1,8 @@
 """Down layers for 1d u-net"""
 
+import logging
+
+logger = logging.getLogger(__name__)
 import torch.nn as nn
 
 from ..modules import ConvBlock1D

@@ -162,7 +162,7 @@ def train():
         model_weights_save_every_iterations=1000,
         summary_writer=summary_writer,
         send_audio_clip_every_iterations=100,
-        dataset_batches_length=len(loader.train_loader),
+        dataset_batches_total_length=len(loader.train_loader),
         training_classifier=True
     )
 

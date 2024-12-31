@@ -12,7 +12,9 @@ import itertools
 import csv
 import sys
 csv.field_size_limit(sys.maxsize)
+import logging
 
+logger = logging.getLogger(__name__)
 import pathlib
 
 from ipywidgets import IntProgress

@@ -2,7 +2,9 @@
 
 from torch import nn
 
+import logging
 
+logger = logging.getLogger(__name__)
 class ConvBlock1D(nn.Module):
     """1D Conv+BN+ReLU block.
 

@@ -4,6 +4,9 @@ Leverages a single Conv1d layer (optionally combined with an Upsampler) to auto-
 input and output tensor shapes. Be wary of data loss with large differences in total size.
 """
 
+import logging
+
+logger = logging.getLogger(__name__)
 from torch import nn
 import torch.nn.functional as nnF
 
