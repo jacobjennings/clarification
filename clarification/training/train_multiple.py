@@ -60,7 +60,7 @@ class TrainMultiple:
             lfc.loss_function = lfc.loss_function.to(config.device)
 
     @staticmethod
-    def config_to_cpu(self, config: AudioTrainerConfig):
+    def config_to_cpu(config: AudioTrainerConfig):
         config.model_training_config.model = config.model_training_config.model.to("cpu")
         for lfc in config.model_training_config.loss_function_configs:
             lfc.loss_function = lfc.loss_function.to("cpu")

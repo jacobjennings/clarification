@@ -37,6 +37,7 @@ class PresetDatasetConfig1(DatasetConfig):
     sample_rate: int = 24000
     sample_batch_ms: int = 300
     overlap_ms: int = 5
+    dataset_batch_size = 16
 
 class PresetCommonVoiceLoader(CommonVoiceLoader):
     def __init__(self, summary_writer, dataset_batch_size, batches_per_iteration, device: Optional[torch.device] = None):

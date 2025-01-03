@@ -11,9 +11,7 @@ from torch.amp import autocast
 from torch.profiler import profile, record_function, ProfilerActivity
 from pathlib import Path
 
-from ..util import better_split_discard_remainder
-from .data_classes import *
-
+from .configs import *
 
 class AudioTrainer:
     def __init__(self, config: AudioTrainerConfig):
@@ -42,7 +40,7 @@ class AudioTrainer:
 
     def train_one_rotation(self):
         if self.s.data_loader_iter is None:
-            self.s.data_loader_iter = iter(self.d.input_dataset_loader)
+            self.s.data_loader_iter = iter(self.m.dataset_loader)
 
         if self.s.train_start_time is None:
             self.s.train_start_time = time.time()
@@ -142,7 +140,7 @@ class AudioTrainer:
                 self.w.add_text(f"model_save_path_{self.m.name}", model_save_path, self.s.batches_trained)
                 if os.path.exists(model_save_path):
                     os.remove(model_save_path)
-                torch.save(self.m.actual_model.state_dict(), model_save_path)
+                torch.save(self.m.model.state_dict(), model_save_path)
                 self.s.batches_since_last_save = 0
 
             if self.s.batches_trained >= self.m.mixed_precision_config.stop_amp_after_batches:
@@ -183,10 +181,10 @@ class AudioTrainer:
         batches_complete = self.s.iteration_count * self.d.batches_per_iteration
         batches_per_second = batches_complete / elapsed_training_time
         self.w.add_scalar("epoch_percentage_complete",
-                          batches_complete / self.d.dataset_batches_total_length * 100,
+                          batches_complete / self.m.dataset_batches_total_length * 100,
                           self.s.batches_trained)
         self.w.add_scalar("epoch_estimated_time_per_epoch_minutes",
-                          self.d.dataset_batches_total_length / batches_per_second / 60,
+                          self.m.dataset_batches_total_length / batches_per_second / 60,
                           self.s.batches_trained)
 
     def run_iteration(
@@ -322,7 +320,7 @@ class AudioTrainer:
         if should_log_extra_stuff:
             self.log_extra_stuff(perf_iteration_start, writer_step, writer_tag_prefix)
 
-    def run_model(self, input_data: torch.Tensor, model_config: AudioTrainerConfig):
+    def run_model(self, input_data: torch.Tensor):
         # def policy_fn(ctx, op, *args, **kwargs):
         #     return torch.utils.checkpoint.CheckpointPolicy.PREFER_RECOMPUTE
         #
@@ -472,7 +470,7 @@ class AudioTrainer:
         return input_subsamples, golden_reconstructed, golden_classifier_values
 
     def reset_epoch(self):
-        self.s.data_loader_iter = iter(self.d.input_dataset_loader)
+        self.s.data_loader_iter = iter(self.m.dataset_loader)
 
     def run_validation(self):
         validation_batch_count = 0

@@ -46,3 +46,10 @@ def loss_group_1(dataset_config: DatasetConfig,
             fn=auraloss.freq.MelSTFTLoss(sample_rate=dataset_config.sample_rate, n_mels=128, device=device).to(device),
             is_unary=False, batch_size=None),
     ]
+
+    # def dd_encoder_maker(name, scalar, layer_sizes):
+    #     dd_model = clarification.loss.DistortionDetectorDenseEncoder(
+    #         in_channels=1, samples_per_batch=samples_per_batch * dataset_batch_size,
+    #         layer_sizes=layer_sizes, device=device, dtype=dtype)
+
+    #     return name, scalar, dd_model, True, samples_per_batch * dataset_batch_size

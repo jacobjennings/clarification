@@ -58,4 +58,8 @@ If a nn.Conv2d layer is directly followed by a nn.BatchNorm2d layer, then the bi
 
 ## Prepare a presentation for book club
 
+## Set up a system for listening tests
+Rank "best sounding" samples with human ears
+Use data to find good loss function configs
+
 

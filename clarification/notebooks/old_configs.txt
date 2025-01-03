@@ -33,3 +33,11 @@
         # dense_maker("dense-fight-resnet1", [32, 48, 80, 48, 32], milestones=[(0, 0.01), (500000, 0.000001)], batches_per_model_rotation=15000),
         # res_maker("resnet1", 96, 6, milestones=[(0, 0.01), (500000, 0.000001)], batches_per_model_rotation=15000), # winner at -12.5ish
 
+
+
+        # dense_maker("dense-fight-resnet1", [32, 48, 80, 48, 32], milestones=[(0, 0.01), (500000, 0.000001)], batches_per_model_rotation=15000),
+        # res_maker("resnet1", 96, 6, milestones=[(0, 0.01), (500000, 0.000001)], batches_per_model_rotation=15000), # winner at -12.5ish
+
+        # 190k class
+        dense_maker("dense-fight-resnet2", [88, 104, 88], milestones=[(0, 0.01), (500000, 0.000001)], batches_per_model_rotation=15000),
+        res_maker("resnet2", 128, 6, milestones=[(0, 0.01), (500000, 0.000001)], batches_per_model_rotation=15000),

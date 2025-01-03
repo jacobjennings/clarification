@@ -1,5 +1,3 @@
-from clarification.training import AudioTrainerConfig
-
 from collections.abc import Sequence
 from dataclasses import dataclass
 import logging
@@ -102,6 +100,7 @@ class PresetTrainingConfig1(ModelTrainingConfig):
 @dataclass
 class SimpleModelTrainingConfig(PresetTrainingConfig1):
     layer_sizes: Sequence[int]
+    model: Optional[nn.Module] = None
 
     def __post__init__(self):
         self.model = ClarificationSimple(
@@ -112,6 +111,7 @@ class SimpleModelTrainingConfig(PresetTrainingConfig1):
 @dataclass
 class DenseTrainingConfig(PresetTrainingConfig1):
     layer_sizes: Sequence[int]
+    model: Optional[nn.Module] = None
 
     def __post__init__(self):
         self.model = ClarificationSimple(
@@ -123,6 +123,7 @@ class DenseTrainingConfig(PresetTrainingConfig1):
 class ResnetTrainingConfig(PresetTrainingConfig1):
     channel_size: int
     layer_count: int
+    model: Optional[nn.Module] = None
 
     def __post__init__(self):
         self.model = ClarificationResNet(

@@ -57,11 +57,13 @@ class AudioTrainerConfig:
     """
     model_training_config: ModelTrainingConfig
     log_behavior_config: LogBehaviorConfig
-    device: str
     training_date_str: str
     state: AudioTrainerState = AudioTrainerState()
+    device: torch.device = None
 
     def __post__init__(self):
+        if not self.device:
+            self.device = torch.get_default_device()
         pass
 
 
