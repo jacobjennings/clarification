@@ -36,18 +36,18 @@ class LogBehaviorConfig:
     profiling_data_output_dir: Optional[str] = None
     profile_every_batches: int | None = 50000
 
-    def __post__init__(self):
+    def __post_init__(self):
         pass
 
 
-@dataclass
+@dataclass(kw_only=True)
 class PresetLogBehaviorConfig1(LogBehaviorConfig):
     runs_subdir_name: str
     writer: Optional[SummaryWriter] = None
 
-    def __post__init__(self):
-        super().__post__init__()
+    def __post_init__(self):
+        super().__post_init__()
         self.profiling_data_output_dir = profiling_data_dir(a_runs_dir=self.runs_subdir_name)
         self.model_weights_dir = models_dir(a_runs_dir=self.runs_subdir_name)
         if not self.writer:
-            self.writer = SummaryWriter(log_dir=runs_dir(self.runs_subdir_name))
+            self.writer = SummaryWriter(log_dir=run_dir(self.runs_subdir_name))

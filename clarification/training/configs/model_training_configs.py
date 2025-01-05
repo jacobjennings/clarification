@@ -1,6 +1,10 @@
 from collections.abc import Sequence
 from dataclasses import dataclass
 import logging
+import pprint
+import json
+
+import clarification.schedulers
 
 logger = logging.getLogger(__name__)
 import torch
@@ -11,6 +15,7 @@ from .loss_configs import *
 from .dataset_configs import *
 from .validation_configs import *
 from .mixed_precision_configs import *
+from ...schedulers import *
 
 @dataclass(kw_only=True)
 class ModelTrainingConfig:
@@ -48,30 +53,30 @@ class ModelTrainingConfig:
     norm_clip: float | None = 1.5
     mixed_precision_config: Optional[MixedPrecisionConfig] = None
 
-    def __post__init__(self):
+    def __post_init__(self):
         self.dataset_batches_total_length = len(self.dataset_loader)
-
+        if not self.mixed_precision_config:
+            self.mixed_precision_config = MixedPrecisionConfig()
         pass
 
+    def prettyprint(self):
+          return json.dumps(self.__dict__, indent=4)
 
 @dataclass(kw_only=True)
 class PresetTrainingConfig1(ModelTrainingConfig):
     batches_per_iteration: int
     training_date_str: str
 
-    writer: SummaryWriter = None
     device: Optional[torch.device] = None
     dtype: Optional[torch.dtype] = None
     loss_function_configs: Optional[Sequence[AudioLossFunctionConfig]] = None
     optimizer: Optional[optim.Optimizer] = None
+    scheduler: Optional[optim.lr_scheduler.LRScheduler] = None
     dataset_config: Optional[DatasetConfig] = None
     dataset_loader: Optional[DataLoader] = None
 
-    def __post__init__(self):
-        super().__post__init__()
-        if not self.writer:
-            self.runs_dir = runs_dir(f"{self.training_date_str}-{self.name}")
-            self.writer = SummaryWriter(log_dir=self.runs_dir)
+    def __post_init__(self):
+        super().__post_init__()
         if not self.device:
             self.device = torch.get_default_device()
         if not self.dtype:
@@ -83,52 +88,49 @@ class PresetTrainingConfig1(ModelTrainingConfig):
         if not self.optimizer:
             self.optimizer = torch.optim.SGD(params=self.model.parameters(), lr=0.01)
 
+        if not self.scheduler:
+            self.scheduler = clarification.schedulers.InterpolatingLR(
+                optimizer=self.optimizer,
+                milestones=[(0, 0.01), (1000000, 0.0001)])
+
         if not self.dataset_config:
             self.dataset_config = PresetDatasetConfig1(batches_per_iteration=self.batches_per_iteration,
                                                        dataset_batch_size=16)
 
-        if not self.dataset_loader:
-            self.common_voice_loader = PresetCommonVoiceLoader(
-                summary_writer=self.writer,
-                dataset_batch_size=self.dataset_config.dataset_batch_size,
-                batches_per_iteration=self.batches_per_iteration,
-                device=self.device)
-            self.common_voice_loader.create_loaders()
-            self.dataset_loader = self.common_voice_loader.train_loader
 
-
-@dataclass
+@dataclass(kw_only=True)
 class SimpleModelTrainingConfig(PresetTrainingConfig1):
     layer_sizes: Sequence[int]
     model: Optional[nn.Module] = None
 
-    def __post__init__(self):
+    def __post_init__(self):
         self.model = ClarificationSimple(
                 name=self.name,
                 layer_sizes=self.layer_sizes, device=self.device, dtype=self.dtype)
-        super().__post__init__()
+        super().__post_init__()
 
-@dataclass
+@dataclass(kw_only=True)
 class DenseTrainingConfig(PresetTrainingConfig1):
     layer_sizes: Sequence[int]
     model: Optional[nn.Module] = None
 
-    def __post__init__(self):
-        self.model = ClarificationSimple(
+    def __post_init__(self):
+        self.model = ClarificationDense(
                 name=self.name,
+                in_channels=1,
                 layer_sizes=self.layer_sizes, device=self.device, dtype=self.dtype)
-        super().__post__init__()
+        super().__post_init__()
 
-@dataclass
+@dataclass(kw_only=True)
 class ResnetTrainingConfig(PresetTrainingConfig1):
     channel_size: int
     layer_count: int
     model: Optional[nn.Module] = None
 
-    def __post__init__(self):
+    def __post_init__(self):
         self.model = ClarificationResNet(
             name=self.name,
             channel_size=self.channel_size,
             layer_count=self.layer_count,
             device=self.device, dtype=self.dtype)
-        super().__post__init__()
+        super().__post_init__()

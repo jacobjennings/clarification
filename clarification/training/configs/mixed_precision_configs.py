@@ -19,5 +19,5 @@ class MixedPrecisionConfig:
     stop_amp_after_batches = 300000
     matmul_batch_count_to_precision: dict[int, str] = None
 
-    def __post__init__(self):
+    def __post_init__(self):
         pass

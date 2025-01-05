@@ -28,7 +28,7 @@ class AudioLossFunctionConfig:
     is_unary: bool = False
     batch_size: Optional[int] = None
 
-    def __post__init__(self):
+    def __post_init__(self):
         pass
 
 def loss_group_1(dataset_config: DatasetConfig,

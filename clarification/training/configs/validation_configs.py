@@ -26,7 +26,7 @@ class ValidationConfig:
     run_validation_every_batches: int
     log_every_batches: int = 5000
 
-    def __post__init__(self):
+    def __post_init__(self):
         pass
 
 @dataclass

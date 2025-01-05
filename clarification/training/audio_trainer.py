@@ -13,6 +13,7 @@ from pathlib import Path
 
 from .configs import *
 
+
 class AudioTrainer:
     def __init__(self, config: AudioTrainerConfig):
         """Training loop for audio.
@@ -31,7 +32,7 @@ class AudioTrainer:
         self.w = config.log_behavior_config.writer
 
         if self.m.mixed_precision_config.use_scaler_dtype:
-            self.scaler = GradScaler()
+            self.s.scaler = GradScaler()
 
         # model_dict_path = models_dir + "/dense4-20241222-184328"
         # model = models[0][1]
@@ -39,7 +40,10 @@ class AudioTrainer:
         # model.eval()
 
     def train_one_rotation(self):
+        print(f"Model training rotation {self.s.rotation_count} start for {self.m.name} @ epoch {self.s.epoch_count}")
+
         if self.s.data_loader_iter is None:
+            print(f"Loading training iterator for {self.m.name} on device {self.m.dataset_loader.pin_memory_device}")
             self.s.data_loader_iter = iter(self.m.dataset_loader)
 
         if self.s.train_start_time is None:
@@ -48,7 +52,8 @@ class AudioTrainer:
         if self.s.epoch_start_time is None:
             self.s.epoch_start_time = time.time()
 
-        print(f"Model training rotation {self.s.rotation_count} start for {self.m.name} @ epoch {self.s.epoch_count}")
+        if self.s.last_samples_processed_log_time is None:
+            self.s.last_samples_processed_log_time = time.time()
 
         iterations_since_step = 0
         batch_count_this_rotation = 0
@@ -132,6 +137,7 @@ class AudioTrainer:
                 self.s.samples_processed_since_last_log = 0
                 self.s.batches_since_last_log = 0
                 self.w.flush()
+                pprint.pprint(self.s, width=2)
 
             if self.s.batches_since_last_save >= self.l.model_weights_save_every_batches:
                 # Better to overwrite to avoid stacking up disk space.
@@ -147,7 +153,7 @@ class AudioTrainer:
                 self.s.scaler = None
                 self.m.mixed_precision_config.use_scaler_dtype = None
 
-            if batch_count_this_rotation < self.m.batches_per_rotation:
+            if batch_count_this_rotation >= self.m.batches_per_rotation:
                 break
 
         self.s.rotation_count += 1
@@ -159,7 +165,11 @@ class AudioTrainer:
             self.s.batches_since_last_validation = 0
 
     def memory_test_run(self):
-        for i in range(4):
+        print(f"Memory test run for {self.m.name} started.")
+        if self.s.data_loader_iter is None:
+            self.s.data_loader_iter = iter(self.m.dataset_loader)
+
+        for i in range(1):
             self.run_iteration(
                 should_record_audio_clips=False,
                 should_log_extra_stuff=False,
@@ -218,7 +228,13 @@ class AudioTrainer:
                 f"{writer_tag_prefix}perf_data_prep", perf_data_prep_end - perf_iteration_start, writer_step)
 
         if should_record_audio_clips:
-            self.record_noisy_clear_audio_clips(golden_reconstructed, input_subsamples, writer_step, writer_tag_prefix)
+            # self.record_noisy_clear_audio_clips(golden_reconstructed, input_subsamples, writer_step, writer_tag_prefix)
+            self.record_noisy_clear_audio_clips(
+                golden_reconstructed=golden_reconstructed,
+                input_subsamples=input_subsamples,
+                writer_step=writer_step,
+                writer_tag_prefix=writer_tag_prefix
+            )
 
         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Model training ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -237,7 +253,7 @@ class AudioTrainer:
         if self.s.scaler and allow_mixed_precision:
             with autocast("cuda", dtype=self.m.mixed_precision_config.use_scaler_dtype):
                 prediction_raw = self.run_model(input_unsqueezed)
-            prediction_raw = self.scaler.scale(prediction_raw)
+            prediction_raw = self.s.scaler.scale(prediction_raw)
         else:
             prediction_raw = self.run_model(input_unsqueezed)
 
@@ -294,16 +310,16 @@ class AudioTrainer:
                 # print(f"Memory reserved: {torch.cuda.memory_reserved() / 1024 / 1024} MB")
                 # print(f"Max memory allocated: {torch.cuda.max_memory_allocated() / 1024 / 1024} MB")
 
-            if self.scaler and allow_mixed_precision:
-                self.scaler.unscale_(optimizer)  # Unscale before clipping
+            if self.s.scaler and allow_mixed_precision:
+                self.s.scaler.unscale_(optimizer)  # Unscale before clipping
 
             if self.m.norm_clip:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=self.m.norm_clip)
 
             if should_step_optimizer:
-                if self.scaler and allow_mixed_precision:
-                    self.scaler.step(optimizer)
-                    self.scaler.update()
+                if self.s.scaler and allow_mixed_precision:
+                    self.s.scaler.step(optimizer)
+                    self.s.scaler.update()
                 else:
                     optimizer.step()
 
@@ -411,7 +427,7 @@ class AudioTrainer:
 
         if should_log_extra_stuff:
             total_norm = 0
-            for p in self.m.actual_model.parameters():
+            for p in self.m.model.parameters():
                 if p.grad is not None:
                     param_norm = p.grad.data.norm(2)  # Calculate L2 norm
                     total_norm += param_norm.item() ** 2
@@ -425,16 +441,16 @@ class AudioTrainer:
 
         return loss, weighted_losses
 
-    def record_noisy_clear_audio_clips(self, golden_reconstructed, input_subsamples, model_config, writer_step,
+    def record_noisy_clear_audio_clips(self, golden_reconstructed, input_subsamples, writer_step,
                                        writer_tag_prefix):
         noisy_audio = self.reconstruct_overlapping_samples_nofade(
             input_subsamples.view(-1, self.d.samples_per_batch)).cpu().detach()
-        model_config.writer.add_audio(f"{writer_tag_prefix}noisy_audio", noisy_audio,
+        self.w.add_audio(f"{writer_tag_prefix}noisy_audio", noisy_audio,
                                       sample_rate=self.d.sample_rate, global_step=writer_step)
         if not self.m.training_classifier:
             clear_audio = golden_reconstructed.cpu().detach()
 
-            model_config.writer.add_audio(f"{writer_tag_prefix}clear_audio", clear_audio,
+            self.w.add_audio(f"{writer_tag_prefix}clear_audio", clear_audio,
                                           sample_rate=self.d.sample_rate, global_step=writer_step)
 
     def iteration_data_prep(self, loader_iter):
@@ -470,6 +486,7 @@ class AudioTrainer:
         return input_subsamples, golden_reconstructed, golden_classifier_values
 
     def reset_epoch(self):
+        print(f"Resetting epoch / iter for {self.m.name}")
         self.s.data_loader_iter = iter(self.m.dataset_loader)
 
     def run_validation(self):

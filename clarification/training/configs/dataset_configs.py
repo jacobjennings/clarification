@@ -1,7 +1,7 @@
 from ...datas import *
 
 from typing import Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import logging
 
 logger = logging.getLogger(__name__)
@@ -32,12 +32,12 @@ class DatasetConfig:
         self.overlap_samples = int((self.overlap_ms / 1000) * self.sample_rate)
 
 
-@dataclass
+@dataclass(kw_only=True)
 class PresetDatasetConfig1(DatasetConfig):
-    sample_rate: int = 24000
-    sample_batch_ms: int = 300
-    overlap_ms: int = 5
-    dataset_batch_size = 16
+    sample_rate: int = field(default=24000)
+    sample_batch_ms: int = field(default=300)
+    overlap_ms: int = field(default=5)
+    dataset_batch_size: int = field(default=16)
 
 class PresetCommonVoiceLoader(CommonVoiceLoader):
     def __init__(self, summary_writer, dataset_batch_size, batches_per_iteration, device: Optional[torch.device] = None):
@@ -46,7 +46,10 @@ class PresetCommonVoiceLoader(CommonVoiceLoader):
             print("batches_per_iteration must be divisible by 16 due to consumption_batch_size in prepare_dataset")
 
         if not device:
-            device = torch.get_default_device()
+            device = str(torch.get_default_device())
+
+        print(f"PresetCommonVoiceLoader device: {device}")
+
         super().__init__(base_dir=base_dir,
                          summary_writer=summary_writer,
                          dataset_batch_size=dataset_batch_size,

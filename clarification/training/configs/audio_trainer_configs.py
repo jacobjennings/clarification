@@ -1,8 +1,9 @@
 from collections.abc import Sequence, Iterable
 from typing import Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import logging
-
+import pprint
+import json
 logger = logging.getLogger(__name__)
 import torch
 import torch.nn as nn
@@ -39,7 +40,7 @@ class AudioTrainerState:
     data_loader_iter: Optional[Iterable[DataLoader]] = None
     scaler: Optional[torch.cuda.amp.GradScaler] = None
 
-    def __post__init__(self):
+    def __post_init__(self):
         pass
 
 
@@ -58,18 +59,22 @@ class AudioTrainerConfig:
     model_training_config: ModelTrainingConfig
     log_behavior_config: LogBehaviorConfig
     training_date_str: str
-    state: AudioTrainerState = AudioTrainerState()
+    state: AudioTrainerState = field(default_factory=AudioTrainerState)
     device: torch.device = None
 
-    def __post__init__(self):
+    def __post_init__(self):
         if not self.device:
             self.device = torch.get_default_device()
         pass
 
 
+    def __hash__(self):
+        return hash(self.model_training_config.name) + hash(self.training_date_str)
+
 @dataclass(kw_only=True)
 class TrainMultipleConfig:
     trainer_configs: Sequence[AudioTrainerConfig]
+    should_perform_memory_test: bool = False
 
-    def __post__init__(self):
+    def __post_init__(self):
         pass
