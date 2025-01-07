@@ -12,7 +12,8 @@ class InferenceBenchmark:
         self.c = config
 
     def run(self):
-        print(f"Preparing inference benchmark for {self.c.model_name} with batch size {self.c.batch_size} and num_batches {self.c.num_test_batches} on device {self.c.device}\nLoading weights, dataset, etc.")
+        total_params = sum(p.numel() for p in self.c.model.parameters())
+        print(f"\nPreparing inference benchmark for {self.c.model_name}. total_params: {total_params}, batch size {self.c.batch_size}, num_batches {self.c.num_test_batches}, device {self.c.device}\nLoading weights, dataset, etc.")
         if self.c.model_weights_path is not None:
             self.c.model.load_state_dict(torch.load(self.c.model_weights_path))
 
