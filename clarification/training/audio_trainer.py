@@ -4,6 +4,8 @@ import time
 import pprint
 import logging
 
+from torch.xpu import memory_allocated
+
 logger = logging.getLogger(__name__)
 import torch.utils.checkpoint
 from torch.cpu.amp import GradScaler
@@ -240,7 +242,7 @@ class AudioTrainer:
 
         # torch.cuda.memory._record_memory_history(max_entries=100000)
 
-        model = self.m.model
+        model = self.m.training_model()
         optimizer = self.m.optimizer
         scheduler = self.m.scheduler
 
@@ -289,6 +291,15 @@ class AudioTrainer:
             writer_step,
             writer_tag_prefix,
             allow_mixed_precision)
+
+        if should_log_extra_stuff:
+            # Log memory at the usual worst case spot, after loss calculation
+            memory_allocated_gb = torch.cuda.memory_allocated() / 1024 / 1024 / 1024
+            memory_reserved_gb = torch.cuda.memory_reserved() / 1024 / 1024 / 1024
+            memory_max_allocated_gb = torch.cuda.max_memory_allocated() / 1024 / 1024 / 1024
+            self.w.add_scalar(f"{writer_tag_prefix}memory_allocated_gb", memory_allocated_gb, writer_step)
+            self.w.add_scalar(f"{writer_tag_prefix}memory_reserved_gb", memory_reserved_gb, writer_step)
+            self.w.add_scalar(f"{writer_tag_prefix}memory_max_allocated_gb", memory_max_allocated_gb, writer_step)
 
         del prediction
 
@@ -356,7 +367,7 @@ class AudioTrainer:
         #         use_reentrant=False,
         #         context_fn=context_fn)
 
-        x = self.m.model(input_data)
+        x = self.m.training_model()(input_data)
         return x
 
     def log_extra_stuff(self, perf_iteration_start, writer_step, writer_tag_prefix):
@@ -427,7 +438,7 @@ class AudioTrainer:
 
         if should_log_extra_stuff:
             total_norm = 0
-            for p in self.m.model.parameters():
+            for p in self.m.training_model().parameters():
                 if p.grad is not None:
                     param_norm = p.grad.data.norm(2)  # Calculate L2 norm
                     total_norm += param_norm.item() ** 2

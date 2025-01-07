@@ -32,6 +32,9 @@ class ModelTrainingConfig:
         batches_per_rotation: Number of batches to train during one call to train_one_rotation().
         dataset_config: DatasetConfig.
         dataset_loader: DataLoader for the input dataset.
+        batches_per_rotation: Number of batches to train before switching models.
+        should_use_dataparallel: If true, use DataParallel to train the model. This overrides model_wrapper.
+        model_wrapper: Optional model wrapper. If set, this will be used for training (aka DataParallel).
         step_every_iterations: Step the scheduler every this number of iterations.
         validation_config: Optional validation configuration.
         training_classifier: If true, this is a classifier model. Data is expected to be a tuple of
@@ -47,6 +50,8 @@ class ModelTrainingConfig:
     dataset_config: DatasetConfig
     dataset_loader: DataLoader
     batches_per_rotation: int
+    should_use_dataparallel: bool = True
+    model_wrapper: Optional[nn.Module] = None
     step_every_iterations: int = 1
     validation_config: Optional[ValidationConfig] = None
     training_classifier: bool = False
@@ -57,10 +62,19 @@ class ModelTrainingConfig:
         self.dataset_batches_total_length = len(self.dataset_loader)
         if not self.mixed_precision_config:
             self.mixed_precision_config = MixedPrecisionConfig()
+
+        if self.should_use_dataparallel:
+            self.model_wrapper = nn.DataParallel(self.model)
+
+        if not self.model_wrapper:
+            self.model_wrapper = self.model
         pass
 
     def prettyprint(self):
           return json.dumps(self.__dict__, indent=4)
+
+    def training_model(self) -> nn.Module:
+        return self.model_wrapper or self.model
 
 @dataclass(kw_only=True)
 class PresetTrainingConfig1(ModelTrainingConfig):
@@ -86,7 +100,7 @@ class PresetTrainingConfig1(ModelTrainingConfig):
             self.loss_function_configs = loss_group_1(self.dataset_config, self.device)
 
         if not self.optimizer:
-            self.optimizer = torch.optim.SGD(params=self.model.parameters(), lr=0.01)
+            self.optimizer = torch.optim.SGD(params=self.training_model().parameters(), lr=0.01)
 
         if not self.scheduler:
             self.scheduler = clarification.schedulers.InterpolatingLR(

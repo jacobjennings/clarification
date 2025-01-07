@@ -80,11 +80,17 @@ class TrainMultiple:
         for lfc in config.model_training_config.loss_function_configs:
             lfc.fn = lfc.fn.to(config.device)
 
+        if config.model_training_config.model is not config.model_training_config.model_wrapper:
+            config.model_training_config.model_wrapper = config.model_training_config.model_wrapper.to(config.device)
+
     @staticmethod
     def config_to_cpu(config: AudioTrainerConfig):
         config.model_training_config.model = config.model_training_config.model.to("cpu")
         for lfc in config.model_training_config.loss_function_configs:
             lfc.fn = lfc.fn.to("cpu")
+
+        if config.model_training_config.model is not config.model_training_config.model_wrapper:
+            config.model_training_config.model_wrapper = config.model_training_config.model_wrapper.to("cpu")
 
     def audio_trainer_for_config(self, config: AudioTrainerConfig):
         if config in self.audio_trainer_config_to_trainer:

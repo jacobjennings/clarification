@@ -76,7 +76,7 @@ def dense_config(training_date_str: str):
 
 
 def resnet_config(training_date_str: str):
-    batches_per_iteration = 32
+    # batches_per_iteration = 32
     # batches_per_iteration = 64
     # batches_per_iteration = 96
     batches_per_iteration = 128
