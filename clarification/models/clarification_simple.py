@@ -1,6 +1,6 @@
 """1D u-net."""
 import logging
-
+import torch
 logger = logging.getLogger(__name__)
 import torch.nn as nn
 import torch.nn.functional as nnF
@@ -9,8 +9,11 @@ from ..modules import OutLayer, Down, ConvBlock1D, Up
 
 
 class ClarificationSimple(nn.Module):
-    def __init__(self, name, device, dtype, layer_sizes=None, invert=False, num_output_convblocks=2):
+    def __init__(self, name, device=None, dtype=torch.float32, layer_sizes=None, invert=False, num_output_convblocks=2):
         super(ClarificationSimple, self).__init__()
+
+        if device is None:
+            device = torch.get_default_device()
 
         if len(layer_sizes) % 2 == 0:
             raise ValueError("The number of layers must be odd.")
@@ -30,7 +33,7 @@ class ClarificationSimple(nn.Module):
         self.up_layers = nn.ModuleList()
         for i in range(layer_sizes_len // 2 - 1):
             a_in_channels = layer_sizes[layer_sizes_len // 2 + i]
-            print(f"layer_sizes {layer_sizes}, layer_sizes_len // 2 + i + 1: {layer_sizes_len // 2 + i + 1}")
+            # print(f"layer_sizes {layer_sizes}, layer_sizes_len // 2 + i + 1: {layer_sizes_len // 2 + i + 1}")
             out_channels = layer_sizes[layer_sizes_len // 2 + i + 1]
             up = Up(name=f"{name}_up_{i}",
                     in_channels=a_in_channels,
@@ -39,7 +42,7 @@ class ClarificationSimple(nn.Module):
                     layer_num=i)
             self.up_layers.add_module("up_" + str(i), up)
 
-        print(f"Out layer: in_channels: {layer_sizes[-1]} out_channels: 1")
+        # print(f"Out layer: in_channels: {layer_sizes[-1]} out_channels: 1")
         self.last_layer = OutLayer(
             name=f"{name}_outlayer",
             in_channels=layer_sizes[-2],

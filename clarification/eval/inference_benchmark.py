@@ -13,7 +13,8 @@ class InferenceBenchmark:
 
     def run(self):
         total_params = sum(p.numel() for p in self.c.model.parameters())
-        print(f"\nPreparing inference benchmark for {self.c.model_name}. total_params: {total_params}, batch size {self.c.batch_size}, num_batches {self.c.num_test_batches}, device {self.c.device}\nLoading weights, dataset, etc.")
+        if self.c.verbose:
+            print(f"\nPreparing inference benchmark for {self.c.model_name}. total_params: {total_params}, batch size {self.c.batch_size}, num_batches {self.c.num_test_batches}, device {self.c.device}\nLoading weights, dataset, etc.")
         if self.c.model_weights_path is not None:
             self.c.model.load_state_dict(torch.load(self.c.model_weights_path))
 
@@ -25,7 +26,8 @@ class InferenceBenchmark:
         else:
             loader_iter = TensorChain(SqueezeIter(iter(self.c.dataset_loader)))
 
-        print(f"Starting inference benchmark for {self.c.model_name}")
+        if self.c.verbose:
+            print(f"Starting inference benchmark for {self.c.model_name}")
         start_perf_time = time.perf_counter()
 
         for batch_idx in range(self.c.num_test_batches):
@@ -40,6 +42,8 @@ class InferenceBenchmark:
         batches_per_s = self.c.num_test_batches * self.c.batch_size / perf_time
         samples_per_s = batches_per_s * self.c.dataset_config.samples_per_batch
         seconds_per_s = samples_per_s / self.c.dataset_config.sample_rate
-        print(f"{self.c.model_name} performance: {batches_per_s:.2f} batches/s, time ratio: {seconds_per_s:.2f} s/s")
+        extra_tab = "\t" if len(str(self.c.device)) < 5 else ""
+        extra_tab_2 = "\t" if len(str(batches_per_s)) < 6 else ""
+        print(f"{self.c.model_name}\t params: {total_params}, \tdevice: {self.c.device}, {extra_tab}\tbatch_size: {self.c.batch_size}, \tnum_batches: {self.c.num_test_batches}, \tbatches_per_s: {batches_per_s:.2f} batches/s, {extra_tab_2}\ttime ratio: {seconds_per_s:.2f} s/s")
 
         self.c.model = self.c.model.to("cpu")

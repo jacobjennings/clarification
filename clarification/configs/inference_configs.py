@@ -17,3 +17,4 @@ class InferenceBenchmarkConfig:
     device: torch.device = field(default=torch.get_default_device())
     batch_size: int = 1
     num_test_batches: int = 1000
+    verbose: bool = False

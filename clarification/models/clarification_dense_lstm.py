@@ -12,11 +12,14 @@ from ..modules import OutLayer, Down, ConvBlock1D, UpNoCat, Glue1D
 # from ..models import ClarificationDense
 
 class ClarificationDenseLSTM(nn.Module):
-    def __init__(self, name, in_channels, samples_per_batch, device, dtype, layer_sizes=None, invert=False, num_output_convblocks=2):
+    def __init__(self, name, in_channels, samples_per_batch, device=None, dtype=torch.float32, layer_sizes=None, invert=False, num_output_convblocks=2):
         super(ClarificationDenseLSTM, self).__init__()
         # lstm_input_size = samples_per_batch
         lstm_channel_size = 20
         hidden_size_multiplier = 4
+
+        if device is None:
+            device = torch.get_default_device()
 
         if len(layer_sizes) % 2 == 0:
             raise ValueError("The number of layers must be odd.")
