@@ -34,7 +34,7 @@ def dense_config(training_date_str: str):
     # batches_per_iteration = 640
     # batches_per_iteration = 768
 
-    model_config_name = "dense_1"
+    model_config_name = "dense-fight-resnet2"
     log_config = c.configs.PresetLogBehaviorConfig1(
         log_info_every_batches=5000,
         runs_subdir_name=f"{training_date_str}-{model_config_name}",
@@ -95,7 +95,7 @@ def resnet_config(training_date_str: str):
     # batches_per_iteration = 640
     # batches_per_iteration = 768
 
-    model_config_name = "resnet_1"
+    model_config_name = "resnet2"
     log_config = c.configs.PresetLogBehaviorConfig1(
         log_info_every_batches=5000,
         runs_subdir_name=f"{training_date_str}-{model_config_name}",

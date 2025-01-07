@@ -12,8 +12,11 @@ from ..modules import ResBlock1D, ConvBlock1D
 
 
 class ClarificationResNet(nn.Module):
-    def __init__(self, name, channel_size, layer_count, device, dtype):
+    def __init__(self, name, channel_size, layer_count, device = None, dtype = torch.float32):
         super(ClarificationResNet, self).__init__()
+
+        if device is None:
+            device = torch.get_default_device()
 
         self.first_layer = nn.Sequential(
             nn.Conv1d(in_channels=1, out_channels=channel_size, stride=1, kernel_size=1, device=device, dtype=dtype),

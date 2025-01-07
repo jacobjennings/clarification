@@ -6,7 +6,7 @@ from torch.utils.tensorboard import SummaryWriter
 import clarification
 from clarification.eval.inference_benchmark import InferenceBenchmark
 from clarification.configs.inference_configs import InferenceBenchmarkConfig
-from clarification.models import ClarificationDense
+from clarification.models import *
 from clarification.util import *
 
 def benchmark_gpu_cpu(name, model, dataset_config, batch_size, num_test_batches):
@@ -48,6 +48,17 @@ def benchmark_dense(name, layer_sizes):
                 layer_sizes=layer_sizes)
     benchmark_gpu_cpu(dense_model_1_name, dense_model_1, dataset_config, 1, 1000)
 
+def benchmark_resnet(name, channel_size, layer_count):
+    dataset_config = clarification.configs.PresetDatasetConfig1(
+        dataset_batch_size=1,
+        batches_per_iteration=1,
+    )
+    resnet_model_1_name = name
+    resnet_model_1 = ClarificationResNet(
+                name=resnet_model_1_name,
+                channel_size=channel_size,
+                layer_count=layer_count)
+    benchmark_gpu_cpu(resnet_model_1_name, resnet_model_1, dataset_config, 1, 1000)
 
 def run():
     set_logical_default_device()
@@ -58,6 +69,8 @@ def run():
 
     benchmark_dense("dense-fight-resnet1", [32, 48, 80, 48, 32])
     benchmark_dense("dense80k-3", [64, 96, 64])
+    benchmark_dense("dense-fight-resnet2", [88, 104, 88])
+    benchmark_resnet("resnet2", 128, 6)
 
     pass
 
