@@ -9,13 +9,13 @@ import clarification.schedulers
 logger = logging.getLogger(__name__)
 import torch
 
-from ...models import *
-from ...util import *
+from clarification.models import *
+from clarification.util import *
 from .loss_configs import *
 from .dataset_configs import *
 from .validation_configs import *
 from .mixed_precision_configs import *
-from ...schedulers import *
+from clarification.schedulers import *
 
 @dataclass(kw_only=True)
 class ModelTrainingConfig:

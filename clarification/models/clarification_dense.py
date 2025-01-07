@@ -11,9 +11,11 @@ from ..modules import OutLayer, Down, ConvBlock1D, UpNoCat
 
 
 class ClarificationDense(nn.Module):
-    def __init__(self, name, in_channels, device, dtype, layer_sizes=None, invert=False, num_output_convblocks=2):
+    def __init__(self, name, in_channels, device = None, dtype = torch.float32, layer_sizes=None, invert=False, num_output_convblocks=2):
         super(ClarificationDense, self).__init__()
         self.layer_sizes = layer_sizes
+        if device is None:
+            device = torch.get_default_device()
         
         if len(layer_sizes) % 2 == 0:
             raise ValueError("The number of layers must be odd.")

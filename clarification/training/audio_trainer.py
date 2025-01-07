@@ -1,10 +1,6 @@
 import os
-import pathlib
 import time
-import pprint
 import logging
-
-from torch.xpu import memory_allocated
 
 logger = logging.getLogger(__name__)
 import torch.utils.checkpoint
@@ -13,7 +9,7 @@ from torch.amp import autocast
 from torch.profiler import profile, record_function, ProfilerActivity
 from pathlib import Path
 
-from .configs import *
+from clarification.configs import *
 
 
 class AudioTrainer:

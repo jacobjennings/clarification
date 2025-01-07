@@ -11,7 +11,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
-from ...util import *
+from clarification.util import *
 
 
 @dataclass(kw_only=True)

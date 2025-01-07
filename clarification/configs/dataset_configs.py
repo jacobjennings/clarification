@@ -1,4 +1,4 @@
-from ...datas import *
+from clarification.datas import *
 
 from typing import Optional
 from dataclasses import dataclass, field
@@ -7,7 +7,7 @@ import logging
 logger = logging.getLogger(__name__)
 import torch
 
-from ...util import *
+from clarification.util import *
 
 @dataclass(kw_only=True)
 class DatasetConfig:

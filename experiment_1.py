@@ -35,28 +35,28 @@ def dense_config(training_date_str: str):
     # batches_per_iteration = 768
 
     model_config_name = "dense_1"
-    log_config = c.training.configs.PresetLogBehaviorConfig1(
+    log_config = c.configs.PresetLogBehaviorConfig1(
         log_info_every_batches=5000,
         runs_subdir_name=f"{training_date_str}-{model_config_name}",
     )
 
-    dataset_config = c.training.configs.PresetDatasetConfig1(batches_per_iteration=batches_per_iteration)
+    dataset_config = c.configs.PresetDatasetConfig1(batches_per_iteration=batches_per_iteration)
 
-    dataset_loader = c.training.configs.PresetCommonVoiceLoader(
+    dataset_loader = c.configs.PresetCommonVoiceLoader(
         summary_writer=log_config.writer,
         dataset_batch_size=dataset_config.dataset_batch_size,
         batches_per_iteration=dataset_config.batches_per_iteration,
     )
     dataset_loader.create_loaders()
 
-    validation_config = c.training.configs.PresetValidationConfig1(
+    validation_config = c.configs.PresetValidationConfig1(
         test_batches=5000,
         run_validation_every_batches=80000,
         log_every_batches=5000,
         test_loader=dataset_loader.test_loader,
     )
 
-    model_config = c.training.configs.DenseTrainingConfig(
+    model_config = c.configs.DenseTrainingConfig(
         name=model_config_name,
         layer_sizes= [88, 104, 88],
         dataset_config=dataset_config,
@@ -67,7 +67,7 @@ def dense_config(training_date_str: str):
         validation_config=validation_config,
     )
 
-    trainer_config = c.training.configs.AudioTrainerConfig(
+    trainer_config = c.configs.AudioTrainerConfig(
         model_training_config=model_config,
         log_behavior_config=log_config,
         training_date_str=training_date_str,
@@ -96,28 +96,28 @@ def resnet_config(training_date_str: str):
     # batches_per_iteration = 768
 
     model_config_name = "resnet_1"
-    log_config = c.training.configs.PresetLogBehaviorConfig1(
+    log_config = c.configs.PresetLogBehaviorConfig1(
         log_info_every_batches=5000,
         runs_subdir_name=f"{training_date_str}-{model_config_name}",
     )
 
-    dataset_config = c.training.configs.PresetDatasetConfig1(batches_per_iteration=batches_per_iteration)
+    dataset_config = c.configs.PresetDatasetConfig1(batches_per_iteration=batches_per_iteration)
 
-    dataset_loader = c.training.configs.PresetCommonVoiceLoader(
+    dataset_loader = c.configs.PresetCommonVoiceLoader(
         summary_writer=log_config.writer,
         dataset_batch_size=dataset_config.dataset_batch_size,
         batches_per_iteration=dataset_config.batches_per_iteration,
     )
     dataset_loader.create_loaders()
 
-    validation_config = c.training.configs.PresetValidationConfig1(
+    validation_config = c.configs.PresetValidationConfig1(
         test_batches=5000,
         run_validation_every_batches=80000,
         log_every_batches=5000,
         test_loader=dataset_loader.test_loader,
     )
 
-    model_config = c.training.configs.ResnetTrainingConfig(
+    model_config = c.configs.ResnetTrainingConfig(
         name=model_config_name,
         channel_size=128,
         layer_count=6,
@@ -129,7 +129,7 @@ def resnet_config(training_date_str: str):
         validation_config=validation_config,
     )
 
-    trainer_config = c.training.configs.AudioTrainerConfig(
+    trainer_config = c.configs.AudioTrainerConfig(
         model_training_config=model_config,
         log_behavior_config=log_config,
         training_date_str=training_date_str,
