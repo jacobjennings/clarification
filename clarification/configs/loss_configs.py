@@ -53,3 +53,9 @@ def loss_group_1(dataset_config: DatasetConfig,
     #         layer_sizes=layer_sizes, device=device, dtype=dtype)
 
     #     return name, scalar, dd_model, True, samples_per_batch * dataset_batch_size
+
+# def loss_group_2(dataset_config: DatasetConfig,
+#                  device: Optional[torch.device] = None) -> Sequence[AudioLossFunctionConfig]:
+#     if not device:
+#         device = torch.get_default_device()
+

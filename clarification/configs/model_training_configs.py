@@ -113,7 +113,7 @@ class PresetTrainingConfig1(ModelTrainingConfig):
 
 
 @dataclass(kw_only=True)
-class SimpleModelTrainingConfig(PresetTrainingConfig1):
+class SimpleTrainingConfig(PresetTrainingConfig1):
     layer_sizes: Sequence[int]
     model: Optional[nn.Module] = None
 
@@ -131,7 +131,6 @@ class DenseTrainingConfig(PresetTrainingConfig1):
     def __post_init__(self):
         self.model = ClarificationDense(
                 name=self.name,
-                in_channels=1,
                 layer_sizes=self.layer_sizes, device=self.device, dtype=self.dtype)
         super().__post_init__()
 

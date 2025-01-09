@@ -70,3 +70,40 @@ class RandomTensorIter:
 
     def __next__(self):
         return torch.randn(self.shape, dtype=self.dtype)
+
+
+class TensorSplitter:
+    def __init__(self, tensor, sample_size=300):
+        """
+        Initializes the TensorSplitter with the given tensor and sample size.
+
+        Args:
+          tensor: A torch tensor of shape [_, _, 7200].
+          sample_size: An integer representing the size of each segment along the last dimension.
+                       Defaults to 300.
+        """
+        self.tensor = tensor
+        self.sample_size = sample_size
+        self.current_idx = 0
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        """
+        Returns the next segment of the tensor.
+
+        Returns:
+          A torch tensor of shape [_, _, sample_size] where dimension 0 increases with each iteration.
+
+        Raises:
+          StopIteration: If there are no more segments in the tensor.
+        """
+        if self.current_idx >= self.tensor.shape[-1]:
+            raise StopIteration
+
+        # Extract the segment from the tensor
+        segment = self.tensor[:, :, self.current_idx:self.current_idx + self.sample_size]
+
+        self.current_idx += self.sample_size
+        return segment

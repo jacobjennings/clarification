@@ -11,11 +11,9 @@ import torch.nn.functional as nnF
 from ..modules import OutLayer, Down, ConvBlock1D, UpNoCat, Glue1D
 # from ..models import ClarificationDense
 
-class ClarificationDenseLSTM(nn.Module):
+class ClarificationDenseLSTMLessOld(nn.Module):
     def __init__(self, name, in_channels, samples_per_batch, device=None, dtype=torch.float32, layer_sizes=None, invert=False, num_output_convblocks=2):
-        super(ClarificationDenseLSTM, self).__init__()
-        # lstm_input_size = samples_per_batch
-        lstm_channel_size = 20
+        super(ClarificationDenseLSTMLessOld, self).__init__()
         hidden_size_multiplier = 4
 
         if device is None:
@@ -32,30 +30,37 @@ class ClarificationDenseLSTM(nn.Module):
         
         output_sizes = [layer_sizes[0]]
         self.down_layers = nn.ModuleList()
-        time_dim = samples_per_batch
         for i in range(len(layer_sizes) // 2):
             input_size = sum(output_sizes)
             out_channels = layer_sizes[i + 1]
             output_sizes.append(out_channels)
             down = Down(name=f"{name}_down_{i}", in_channels=input_size, out_channels=out_channels, device=device, dtype=dtype)
             self.down_layers.add_module("down_" + str(i), down)
-            time_dim = math.ceil(time_dim / 2)
-        
+
         # self.pre_lstm_reduction = Glue1D(in_channels=layer_sizes[len(layer_sizes) // 2 + 1], out_channels=max_layer_size,
         #                                  in_sample_size=samples_per_batch // 2, out_sample_size=input_size,
         #                                  device=device, dtype=dtype)
         
         # lstm_input_channel_size = layer_sizes[len(layer_sizes) // 2] // 8
-        
-        # print(f"times_dim: {time_dim}")
-        self.lstm_conv = nn.Conv1d(in_channels=layer_sizes[len(layer_sizes) // 2], 
-                                   out_channels=lstm_channel_size, kernel_size=4, stride=16, padding=0, bias=False)
-        lstm_input_size = math.ceil(time_dim / 16)
-        # print(f"lstm_input_size: {lstm_input_size}")
-        
+
+        time_dim = samples_per_batch
+        for i in range(len(layer_sizes) // 2):
+            print(f"Processing time_dim: {time_dim}")
+            time_dim = math.ceil(time_dim / 2)
+
+        lstm_input_size = math.ceil(time_dim)
+        lstm_kernel_stride_size = 16
+        lstm_input_size //= lstm_kernel_stride_size
+
+        down_layer_size_before_lstm = layer_sizes[len(layer_sizes) // 2]
+
+        print(f"lstm_input_size: {lstm_input_size} layer_sizes[len(layer_sizes) // 2]: {layer_sizes[len(layer_sizes) // 2]}")
+        self.lstm_conv = nn.Conv1d(in_channels=layer_sizes[len(layer_sizes) // 2],
+                                   out_channels=down_layer_size_before_lstm // hidden_size_multiplier, kernel_size=lstm_kernel_stride_size, stride=lstm_kernel_stride_size, padding=0, bias=False)
+
         self.lstm = nn.LSTM(input_size=lstm_input_size, hidden_size=hidden_size_multiplier * lstm_input_size,
-                            num_layers=1, batch_first=True, device=device, dtype=dtype)
-        output_sizes.append(lstm_channel_size)
+                            num_layers=1, batch_first=False, device=device, dtype=dtype)
+        output_sizes.append(down_layer_size_before_lstm)
 
         self.up_layers = nn.ModuleList()
         for i in range(layer_sizes_len // 2 - 1):
@@ -89,13 +94,22 @@ class ClarificationDenseLSTM(nn.Module):
             # print(f"cd 2 down layer {i} x.size() {x.size()}")
 
             x = down_layer(x)
+            print(f"Down layer {i} x size: {x.size()}")
             outputs.append(x)
 
-        # print(f"x size before lstm preprocess: {x.size()}")        
+        print(f"x size before lstm preprocess: {x.size()}")
         lstm_input_preprocessed = self.lstm_conv(x)
-        # print(f"lstm_input_preprocessed size: {lstm_input_preprocessed.size()}")
+        print(f"lstm_input_preprocessed size after conv: {lstm_input_preprocessed.size()}")
+        lstm_input_preprocessed = lstm_input_preprocessed.view(-1, 1, lstm_input_preprocessed.size()[-1])
+        # lstm_input_preprocessed = lstm_input_preprocessed.view(1, -1, lstm_input_preprocessed.shape[-1])
+        print(f"lstm_input_preprocessed size after view: {lstm_input_preprocessed.size()}")
         lstm_output = self.lstm(lstm_input_preprocessed)[0]
+        print(f"lstm_output size: {lstm_output.size()}")
+        lstm_output = lstm_output.view(x.size()[0], x.size()[1], -1)
+        print(f"lstm_output size after view: {lstm_output.size()}")
         outputs.append(lstm_output)
+
+        print(f"output sizes after lstm: {[d.size() for d in outputs]}")
         
         for (i, up_layer) in enumerate(self.up_layers):
             # print(f"outputs sizes: {[d.size() for d in outputs]}")
@@ -103,6 +117,8 @@ class ClarificationDenseLSTM(nn.Module):
             processed_inputs = [
                 nn.functional.interpolate(output, size=x.size()[2], mode='nearest')
                 for output in outputs]
+
+            print(f"up layer {i} processed_inputs sizes: {[d.size() for d in processed_inputs]}")
             
             x = torch.cat(tuple(processed_inputs), dim=1)
 

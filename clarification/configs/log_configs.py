@@ -47,7 +47,8 @@ class PresetLogBehaviorConfig1(LogBehaviorConfig):
 
     def __post_init__(self):
         super().__post_init__()
-        self.profiling_data_output_dir = profiling_data_dir(a_runs_dir=self.runs_subdir_name)
-        self.model_weights_dir = models_dir(a_runs_dir=self.runs_subdir_name)
+        runs_subdir_full = runs_dir() + "/" + self.runs_subdir_name
+        self.profiling_data_output_dir = profiling_data_dir(a_runs_dir=runs_subdir_full)
+        self.model_weights_dir = models_dir(a_runs_dir=runs_subdir_full)
         if not self.writer:
-            self.writer = SummaryWriter(log_dir=run_dir(self.runs_subdir_name))
+            self.writer = SummaryWriter(log_dir=runs_subdir_full)

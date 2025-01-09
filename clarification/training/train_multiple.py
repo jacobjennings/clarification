@@ -13,6 +13,19 @@ class TrainMultiple:
 
         pass
 
+    # def run(self):
+    #     torch.cuda.memory._record_memory_history(max_entries=1000000)
+    #
+    #     with profile(activities=[ProfilerActivity.CUDA], profile_memory=True, record_shapes=True) as prof:
+    #         with record_function(f"profile_memory_test_rotation"):
+    #             self.run2()
+    #     profiling_file_path = "/workspace/tmpprofile"
+    #     # Path(profiling_file_path).mkdir(parents=True, exist_ok=True)
+    #     torch.cuda.memory._dump_snapshot(profiling_file_path)
+    #     torch.cuda.memory._record_memory_history(enabled=None)
+    #     print(f"Wrote profiling data to {profiling_file_path}")
+
+
     def run(self):
         clear_cache_and_gc()
 
@@ -29,25 +42,12 @@ class TrainMultiple:
                 self.train_rotation(audio_trainer_config=model_training_config, memory_test_run=True)
 
         while True:
-            # torch.cuda.memory._record_memory_history(max_entries=10000000)
-            #
-            # with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], record_shapes=True) as prof:
-            #     with record_function(f"profile_full_rotation"):
-            #         for model_training_config in self.c.trainer_configs:
-            #             self.train_rotation(audio_trainer_config=model_training_config)
-            # profiling_file_path = "/workspace/tmpprofile"
-            # # Path(profiling_file_path).mkdir(parents=True, exist_ok=True)
-            # torch.cuda.memory._dump_snapshot(profiling_file_path)
-            # torch.cuda.memory._record_memory_history(enabled=None)
-            # print(f"Wrote profiling data to {profiling_file_path}")
-
             for model_training_config in self.c.trainer_configs:
                 self.train_rotation(audio_trainer_config=model_training_config)
 
         pass
 
     def train_rotation(self, audio_trainer_config: AudioTrainerConfig, memory_test_run=False):
-        # now_str = date_str = datetime.now().strftime('%Y-%m-%d__%H-%M-%S')
         self.config_to_device(audio_trainer_config)
         trainer = self.audio_trainer_for_config(audio_trainer_config)
 
@@ -61,9 +61,9 @@ class TrainMultiple:
         # Cuda memory usage:
         if torch.cuda.is_available():
             print(f"After {audio_trainer_config.model_training_config.name} Memory allocated: {torch.cuda.memory_allocated()}")
-            print(f"Max memory allocated: {torch.cuda.max_memory_allocated()}")
-            print(f"Memory reserved: {torch.cuda.memory_reserved()}")
-            print(f"Max memory reserved: {torch.cuda.max_memory_reserved()}")
+            print(f"Max memory allocated: {torch.cuda.max_memory_allocated() / 1024 / 1024}")
+            print(f"Memory reserved: {torch.cuda.memory_reserved() / 1024 / 1024}")
+            print(f"Max memory reserved: {torch.cuda.max_memory_reserved() / 1024 / 1024}")
 
         pass
 

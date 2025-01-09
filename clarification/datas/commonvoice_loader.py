@@ -18,14 +18,12 @@ class CommonVoiceLoader:
 
     def __init__(self,
                  base_dir,
-                 summary_writer,
                  dataset_batch_size,
                  batches_per_iteration,
                  should_pin_memory,
                  num_workers,
                  device):
         self.base_dir = base_dir
-        self.summary_writer = summary_writer
         self.dataset_batch_size = dataset_batch_size
         self.loader_batch_size = batches_per_iteration // dataset_batch_size
         self.should_pin_memory = should_pin_memory
@@ -54,15 +52,16 @@ class CommonVoiceLoader:
 
         train_generator = torch.Generator(device=self.device)
 
-        if self.summary_writer:
-            self.summary_writer.add_text("CommonVoiceLoader",
-                                         f"train_generator seed: {train_generator.initial_seed()}")
+        # TODO logger
+        # if self.summary_writer:
+        #     self.summary_writer.add_text("CommonVoiceLoader",
+        #                                  f"train_generator seed: {train_generator.initial_seed()}")
 
         train_loader = DataLoader(
             self.train_dataset,
             batch_size=self.loader_batch_size,
             generator=train_generator,
-            num_workers=self.num_workers,
+            # num_workers=self.num_workers,
             # pin_memory=self.should_pin_memory,
             # pin_memory_device=self.device,
         )
@@ -75,7 +74,7 @@ class CommonVoiceLoader:
             self.test_dataset,
             batch_size=self.loader_batch_size,
             generator=test_generator,
-            num_workers=self.num_workers,
+            # num_workers=self.num_workers,
             # pin_memory=self.should_pin_memory,
             # pin_memory_device=self.device,
         )

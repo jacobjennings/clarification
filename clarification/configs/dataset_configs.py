@@ -40,7 +40,7 @@ class PresetDatasetConfig1(DatasetConfig):
     dataset_batch_size: int = field(default=16)
 
 class PresetCommonVoiceLoader(CommonVoiceLoader):
-    def __init__(self, summary_writer, dataset_batch_size, batches_per_iteration, device: Optional[torch.device] = None):
+    def __init__(self, dataset_batch_size, batches_per_iteration, device: Optional[torch.device] = None):
         base_dir = dataset_dir()
         if batches_per_iteration % 16 != 0:
             print("batches_per_iteration must be divisible by 16 due to consumption_batch_size in prepare_dataset")
@@ -51,7 +51,6 @@ class PresetCommonVoiceLoader(CommonVoiceLoader):
         print(f"PresetCommonVoiceLoader device: {device}")
 
         super().__init__(base_dir=base_dir,
-                         summary_writer=summary_writer,
                          dataset_batch_size=dataset_batch_size,
                          batches_per_iteration=batches_per_iteration,
                          should_pin_memory=True,

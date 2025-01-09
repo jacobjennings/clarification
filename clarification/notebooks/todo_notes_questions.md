@@ -1,15 +1,25 @@
 
-## Work on ext4 containers and opus-ify base dataset
-
 ## Gradient clipping schedule?
 
-## LSTM at smaller model sizes
+## LSTM at smaller model sizes / fix lstm models
 
 ## Revisit other layer shapes / architectures
 Lower input sample rate, higher output sample rate
 Super resolution
 
 ## vast.ai cli script
+
+### Think about improving assembly of models
+Should be easier to get correct layer sizes
+Visual assembly
+Helper functions to get expected outputs
+Explainable parameter distribution
+Activation visualization
+
+### Quantization
+
+### Pruning
+Activation visualization
 
 ## Are there existing trainers that I can use as a reference to improve audio_trainer.py?
 
@@ -23,10 +33,6 @@ Clipping detection
     look for very high-frequency harmonics
 
 ## Try torchaudio.functional.rnnt_loss
-
-## Try pytorch profiler
-
-## Get LSTM models fixed up
 
 ## Turn on cudNN benchmarking
 If your model architecture remains fixed and your input size stays constant, setting torch.backends.cudnn.benchmark = True might be beneficial

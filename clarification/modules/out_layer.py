@@ -29,7 +29,7 @@ class OutLayer(nn.Module):
         self.sequential.add_module(f"convblock_{num_convblocks}", ConvBlock1D(
             name=f"{name}_convblock_{num_convblocks}",
             in_channels=out_channels,
-            out_channels=out_channels,
+            out_channels=1,
             device=device, dtype=dtype, last_layer=True))
 
 

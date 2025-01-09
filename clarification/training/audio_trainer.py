@@ -44,6 +44,7 @@ class AudioTrainer:
             print(f"Loading training iterator for {self.m.name} on device {self.m.dataset_loader.pin_memory_device}")
             self.s.data_loader_iter = iter(self.m.dataset_loader)
 
+        # TODO WRONG TIME CALCULATIONS WHEN PAUSED
         if self.s.train_start_time is None:
             self.s.train_start_time = time.time()
 
@@ -80,36 +81,37 @@ class AudioTrainer:
                 self.s.last_matmul_value = furthest_matmul_value
                 torch.set_default_tensor_type(furthest_matmul_value)
 
-            should_profile = self.l.profile_every_batches and self.s.batches_since_last_profile >= self.l.profile_every_batches
-            if should_profile:
-                self.s.batches_since_last_profile = 0
-                torch.cuda.memory._record_memory_history(max_entries=100000)
-
-                with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], record_shapes=True) as prof:
-                    with record_function(f"profile_{self.m.name}_iteration"):
-                        self.run_iteration(
-                            should_record_audio_clips=send_audio_clips,
-                            should_log_extra_stuff=should_log_extra_stuff,
-                            writer_step=self.s.batches_trained,
-                            should_step_optimizer=should_step_optimizer,
-                            allow_mixed_precision=True,
-                            is_validation=False,
-                        )
-
-                profiling_file_path = f"{self.l.profiling_data_output_dir}/profile_{self.c.training_date_str}_{self.m.name}"
-                Path(profiling_file_path).mkdir(parents=True, exist_ok=True)
-                torch.cuda.memory._dump_snapshot(self.l.profiling_data_output_dir + "/profile_" + self.m.name)
-                torch.cuda.memory._record_memory_history(enabled=None)
-
-            else:
-                self.run_iteration(
-                    should_record_audio_clips=send_audio_clips,
-                    should_log_extra_stuff=should_log_extra_stuff,
-                    writer_step=self.s.batches_trained,
-                    should_step_optimizer=should_step_optimizer,
-                    allow_mixed_precision=True,
-                    is_validation=False
-                )
+            # TODO
+            # should_profile = self.l.profile_every_batches and self.s.batches_since_last_profile >= self.l.profile_every_batches
+            # if should_profile:
+            #     self.s.batches_since_last_profile = 0
+            #     torch.cuda.memory._record_memory_history(max_entries=100000)
+            #
+            #     with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], record_shapes=True) as prof:
+            #         with record_function(f"profile_{self.m.name}_iteration"):
+            #             self.run_iteration(
+            #                 should_record_audio_clips=send_audio_clips,
+            #                 should_log_extra_stuff=should_log_extra_stuff,
+            #                 writer_step=self.s.batches_trained,
+            #                 should_step_optimizer=should_step_optimizer,
+            #                 allow_mixed_precision=True,
+            #                 is_validation=False,
+            #             )
+            #
+            #     profiling_file_path = f"{self.l.profiling_data_output_dir}/profile_{self.c.training_date_str}_{self.m.name}"
+            #     Path(profiling_file_path).mkdir(parents=True, exist_ok=True)
+            #     torch.cuda.memory._dump_snapshot(self.l.profiling_data_output_dir + "/profile_" + self.m.name)
+            #     torch.cuda.memory._record_memory_history(enabled=None)
+            #
+            # else:
+            self.run_iteration(
+                should_record_audio_clips=send_audio_clips,
+                should_log_extra_stuff=should_log_extra_stuff,
+                writer_step=self.s.batches_trained,
+                should_step_optimizer=should_step_optimizer,
+                allow_mixed_precision=True,
+                is_validation=False
+            )
 
             bpi = self.d.batches_per_iteration
             batch_count_this_rotation += bpi
