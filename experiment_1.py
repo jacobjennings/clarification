@@ -22,11 +22,11 @@ from clarification.util import *
 # batches_per_iteration = 288
 # batches_per_iteration = 320
 # batches_per_iteration = 352
-# batches_per_iteration = 384
+batches_per_iteration = 384
 # batches_per_iteration = 416
 # batches_per_iteration = 448
 # batches_per_iteration = 480
-batches_per_iteration = 512
+# batches_per_iteration = 512
 # batches_per_iteration = 640
 # batches_per_iteration = 768
 # batches_per_iteration = 896
@@ -135,9 +135,9 @@ class Experiment1:
         dataset_loader.create_loaders()
 
         validation_config = c.configs.PresetValidationConfig1(
-            test_batches=5000,
+            test_batches=10000,
             run_validation_every_batches=100000,
-            log_every_batches=5000,
+            log_every_batches=10000,
             test_loader=dataset_loader.test_loader,
         )
         return dataset_config, dataset_loader, validation_config
@@ -162,8 +162,6 @@ class Experiment1:
 
             self.dense_config("dense70k-61", [80, 24, 64]),
             self.dense_config("dense70k-77", [88, 64, 32]),
-            self.dense_config("dense70k-159", [56, 32, 48, 16]),
-            self.dense_config("dense70k-171", [64, 40, 16, 24]),
             self.dense_config("dense70k-401", [40, 24, 16, 56, 32]),
             self.dense_config("dense70k-523", [64, 48, 16, 24, 32]),
         ]
