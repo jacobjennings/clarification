@@ -55,7 +55,7 @@ class ModelTrainingConfig:
     step_every_iterations: int = 1
     validation_config: Optional[ValidationConfig] = None
     training_classifier: bool = False
-    norm_clip: float | None = 1.5
+    norm_clip: float | None = 1
     mixed_precision_config: Optional[MixedPrecisionConfig] = None
 
     def __post_init__(self):

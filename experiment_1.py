@@ -18,11 +18,11 @@ from clarification.util import *
 # batches_per_iteration = 160
 # batches_per_iteration = 192
 # batches_per_iteration = 224
-# batches_per_iteration = 256
+batches_per_iteration = 256
 # batches_per_iteration = 288
 # batches_per_iteration = 320
 # batches_per_iteration = 352
-batches_per_iteration = 384
+# batches_per_iteration = 384
 # batches_per_iteration = 416
 # batches_per_iteration = 448
 # batches_per_iteration = 480
@@ -53,8 +53,9 @@ class Experiment1:
 
     def dense_config(self, name, layer_sizes):
         log_config = c.configs.PresetLogBehaviorConfig1(
-            log_info_every_batches=25000,
+            log_info_every_batches=50000,
             runs_subdir_name=f"{self.training_date_str}-{name}",
+            send_audio_clip_every_batches=100000
         )
 
         model_config = c.configs.DenseTrainingConfig(
@@ -77,8 +78,9 @@ class Experiment1:
 
     def simple_config(self, name, layer_sizes):
         log_config = c.configs.PresetLogBehaviorConfig1(
-            log_info_every_batches=5000,
+            log_info_every_batches=50000,
             runs_subdir_name=f"{self.training_date_str}-{name}",
+            send_audio_clip_every_batches=100000
         )
 
         model_config = c.configs.SimpleTrainingConfig(
@@ -87,7 +89,7 @@ class Experiment1:
             dataset_config=self.dataset_config,
             dataset_loader=self.dataset_loader.train_loader,
             batches_per_iteration=batches_per_iteration,
-            batches_per_rotation=5000,
+            batches_per_rotation=50000,
             training_date_str=self.training_date_str,
             validation_config=self.validation_config,
         )
@@ -126,7 +128,10 @@ class Experiment1:
         return trainer_config
 
     def make_shared_configs(self):
-        dataset_config = c.configs.PresetDatasetConfig1(batches_per_iteration=batches_per_iteration)
+        dataset_config = c.configs.PresetDatasetConfig1(
+            batches_per_iteration=batches_per_iteration,
+            dataset_batch_size=32,
+        )
 
         dataset_loader = c.configs.PresetCommonVoiceLoader(
             dataset_batch_size=dataset_config.dataset_batch_size,
@@ -160,15 +165,18 @@ class Experiment1:
             # dense_config(training_date_str, "dense90k-2", dense_dataset_config, dense_dataset_loader,
             #              dense_validation_config, [44, 40, 36, 32, 28], batches_per_iteration),
 
-            self.dense_config("dense70k-61", [80, 24, 64]),
-            self.dense_config("dense70k-77", [88, 64, 32]),
-            self.dense_config("dense70k-401", [40, 24, 16, 56, 32]),
-            self.dense_config("dense70k-523", [64, 48, 16, 24, 32]),
+            # self.dense_config("dense70k-61", [80, 24, 64]), #bad
+            # self.dense_config("dense70k-77", [88, 64, 32]),
+            # self.dense_config("dense70k-401", [40, 24, 16, 56, 32]),
+            # self.dense_config("dense70k-523", [64, 48, 16, 24, 32]),
+
+            # self.simple_config("simple1M-1", [72, 120, 168, 216, 168, 120, 72]),
+            self.simple_config("simple2M-1", [160, 192, 224, 256, 224, 192, 160]),
         ]
 
         train_multiple_config = c.training.train_multiple.TrainMultipleConfig(
             trainer_configs=configs,
-            should_perform_memory_test=True,
+            should_perform_memory_test=False,
         )
         train_multiple = c.training.train_multiple.TrainMultiple(
             config=train_multiple_config

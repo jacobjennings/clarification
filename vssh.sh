@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/bash +x
 
 if [[ $# -ne 1 ]]; then
   echo "Error: This script requires exactly one parameter, the session name."

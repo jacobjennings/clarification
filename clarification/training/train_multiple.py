@@ -35,6 +35,8 @@ class TrainMultiple:
             model_config = trainer_config.model_training_config
             total_params = sum(p.numel() for p in model_config.model.parameters())
             trainer_config.log_behavior_config.writer.add_text(f"total_params_{model_config.name}", f"{total_params}")
+
+
             print(f"total_params_{model_config.name}: {total_params}")
 
         if self.c.should_perform_memory_test:
@@ -42,14 +44,17 @@ class TrainMultiple:
                 self.train_rotation(audio_trainer_config=model_training_config, memory_test_run=True)
 
         while True:
+            previous_iterator = None
             for model_training_config in self.c.trainer_configs:
+                model_training_config.state.data_loader_iter = previous_iterator
                 self.train_rotation(audio_trainer_config=model_training_config)
+                previous_iterator = model_training_config.state.data_loader_iter
 
         pass
 
     def train_rotation(self, audio_trainer_config: AudioTrainerConfig, memory_test_run=False):
-        self.config_to_device(audio_trainer_config)
         trainer = self.audio_trainer_for_config(audio_trainer_config)
+        self.config_to_device(config=audio_trainer_config)
 
         if memory_test_run:
             trainer.memory_test_run()
@@ -91,7 +96,7 @@ class TrainMultiple:
         if config in self.audio_trainer_config_to_trainer:
             return self.audio_trainer_config_to_trainer[config]
 
+        print(f"Creating trainer for config {config.__hash__}")
         trainer = AudioTrainer(config)
         self.audio_trainer_config_to_trainer[config] = trainer
         return trainer
-

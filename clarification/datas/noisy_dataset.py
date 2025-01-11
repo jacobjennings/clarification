@@ -26,7 +26,7 @@ class NoisyCommonsDataset(Dataset):
                 raise ValueError(f"batch_size {self.batch_size} must be a multiple of consumption_batch_size {self.consumption_batch_size}")
             self.consumption_batches_multiplier = self.batch_size // self.consumption_batch_size
             # Opus always decodes at 48khz, bc torchaudio doesn't support passing input sample rate to decoder in ffmpeg
-            self.resampler = torchaudio.transforms.Resample(orig_freq=48000, new_freq=self.sample_rate).to(device)
+            self.resampler = None
 
         with open(f"{base_dir}/{csv_filename}") as csvfile:
             fieldnames = ['path', 'sentence_id']
@@ -43,7 +43,9 @@ class NoisyCommonsDataset(Dataset):
             sample_info = self.sample_infos[consumption_batch_idx]
             path = sample_info['path']
             absolute_path = f"{self.base_dir}/{path}"
-            audio, _ = torchaudio.load(absolute_path)
+            audio, actual_sample_rate = torchaudio.load(absolute_path, backend="soundfile")
+            if self.resampler == None:
+                self.resampler = torchaudio.transforms.Resample(orig_freq=actual_sample_rate, new_freq=self.sample_rate).to(self.device)
             audio = audio.to(self.device)
             audio = self.resampler(audio)
             if audio_aggregated is None:

@@ -61,7 +61,9 @@ class CommonVoiceLoader:
             self.train_dataset,
             batch_size=self.loader_batch_size,
             generator=train_generator,
-            # num_workers=self.num_workers,
+            num_workers=self.num_workers,
+            persistent_workers=True,
+            prefetch_factor=1,
             # pin_memory=self.should_pin_memory,
             # pin_memory_device=self.device,
         )
@@ -74,7 +76,9 @@ class CommonVoiceLoader:
             self.test_dataset,
             batch_size=self.loader_batch_size,
             generator=test_generator,
-            # num_workers=self.num_workers,
+            num_workers=1,
+            prefetch_factor=1,
+            # persistent_workers=True,
             # pin_memory=self.should_pin_memory,
             # pin_memory_device=self.device,
         )

@@ -207,6 +207,7 @@ class AudioTrainer:
             is_validation: bool,
             input_loader_iter=None
     ):
+        print(".", end="")
 
         if input_loader_iter is None:
             input_loader_iter = self.s.data_loader_iter

@@ -54,5 +54,5 @@ class PresetCommonVoiceLoader(CommonVoiceLoader):
                          dataset_batch_size=dataset_batch_size,
                          batches_per_iteration=batches_per_iteration,
                          should_pin_memory=True,
-                         num_workers=4,
+                         num_workers=8,
                          device=device)
