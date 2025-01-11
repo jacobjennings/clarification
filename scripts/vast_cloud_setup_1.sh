@@ -1,4 +1,4 @@
-#!/bin/bash +x
+#!/bin/bash -x
 
 apt install -y vim ack tree zsh nvtop
 

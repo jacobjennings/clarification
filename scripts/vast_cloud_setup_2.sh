@@ -1,4 +1,4 @@
-#!/bin/zsh +x
+#!/bin/zsh -x
 
 cd /workspace || exit 1
 
@@ -29,7 +29,7 @@ curl -fsSL https://pyenv.run | bash
 source ~/.zshrc
 
 echo "Extracting dataset"
-tar -x -M -F /workspace/clarification/tv.sh -f clarification-ds1.tar.0 & progress -mp $!
+tar -x -M -F /workspace/clarification/scripts/tv.sh -f clarification-ds1.tar.0 & progress -mp $!
 
 mkdir mounted_image
 mv noisy-commonvoice-24k-300ms-5ms-opus mounted_image/
@@ -42,6 +42,4 @@ pyenv global 3.12.3
 
 cd clarification || exit 1
 python3 -m venv venv
-venv/bin/pip install -r requirements.txt
-
-
+venv/bin/pip install --find-links /workspace/wheelcache -r requirements.txt
