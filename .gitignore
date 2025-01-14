@@ -1,7 +1,7 @@
 runs/
 
 ssh_*.json
-
+cmake-build-debug
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

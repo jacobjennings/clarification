@@ -24,3 +24,5 @@ export VSSH_TARGET
 # Remove the user, just leaving the ip address
 VSSH_IP=${VSSH_TARGET#*@}
 export VSSH_IP
+
+alias vast=/workspace/clarification/venv/bin/vastai
