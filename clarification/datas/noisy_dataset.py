@@ -43,7 +43,7 @@ class NoisyCommonsDataset(Dataset):
             sample_info = self.sample_infos[consumption_batch_idx]
             path = sample_info['path']
             absolute_path = f"{self.base_dir}/{path}"
-            audio, actual_sample_rate = torchaudio.load(absolute_path, backend="ffmpeg")
+            audio, actual_sample_rate = torchaudio.load(absolute_path, backend="soundfile")
             if self.resampler == None:
                 self.resampler = torchaudio.transforms.Resample(orig_freq=actual_sample_rate, new_freq=self.sample_rate).to(self.device)
             audio = audio.to(self.device)
