@@ -13,6 +13,7 @@ import csv
 import sys
 csv.field_size_limit(sys.maxsize)
 import logging
+import ffmpeg
 
 logger = logging.getLogger(__name__)
 import pathlib
@@ -52,19 +53,18 @@ from torch.utils.tensorboard import SummaryWriter
 base_dataset_directory = '/workspace/cv-20/cv-corpus-20.0-2024-12-06'
 
 # Uncomment these. Safety measure to avoid accidental use.
-train_out_dataset_directory = '/workspace/noisy-commonvoice-24k-300ms-5ms-opus2/train'
-test_out_dataset_directory = '/workspace/noisy-commonvoice-24k-300ms-5ms-opus2/test'
+# train_out_dataset_directory = '/workspace/noisy-commonvoice-24k-300ms-2ms-opus-4-en/train'
+# test_out_dataset_directory = '/workspace/noisy-commonvoice-24k-300ms-2ms-opus-4-en/test'
 
 num_processed = Value("l", 0)
 
 sample_ms = 300
-overlap_ms = 5
+overlap_ms = 2
 
 megachunk_size = 1000
 
-consumption_batch_size = 16
-process_batch_size = 96
-process_count = 8
+process_batch_size = 1
+process_count = 48
 
 resample_lock = threading.Lock()
 
@@ -88,7 +88,7 @@ class AddGaussianNoise(object):
         self.mean = mean
 
     def __call__(self, tensor):
-        return tensor + torch.randn(tensor.size(), device="cuda") * self.std + self.mean
+        return tensor + torch.randn(tensor.size(), device=tensor.device) * self.std + self.mean
 
     def __repr__(self):
         return self.__class__.__name__ + '(mean={0}, std={1})'.format(self.mean, self.std)
@@ -106,76 +106,92 @@ def process_file(data):
     
     # print(f"batch_idx: {batch_idx}, megachunk_idx: {megachunk_idx}")
 
-    resampled_clear_subsamples_aggregate = None
-    noisy_subsamples_aggregate = None
+    # clear_subsamples_aggregate = None
+    # noisy_subsamples_aggregate = None
 
-    for data in data_batch:
-        if num_processed.value % 500 == 0 and num_processed.value != 0:
-            t1 = time.time()
-            elapsed = t1 - t0
-            files_per_second = num_processed.value / elapsed
-            print(
-                f"Processed {num_processed.value}/{data_loader_len} files "
-                f"({num_processed.value / data_loader_len * 100:.0f}%). "
-                f"Elapsed: {elapsed:.0f}s. "
-                f"Files/second: {files_per_second:.0f}. "
-                f"Remaining estimated hours: {(data_loader_len - num_processed.value) / files_per_second / 60 / 60:.2f}")
+    if len(data_batch) != 1:
+        raise ValueError("len(data_batch) != 1")
 
-        num_processed.value += 1
+    # for data in data_batch:
+    data = data_batch[0]
 
-        original_waveform = data[0].squeeze()
-        sample_rate = data[1][0].item()
-        # locale = data[2]["locale"]
-        resampler = TAT.Resample(sample_rate, resample_rate, dtype=torch.float32).to("cuda")
-        # with resample_lock:
-        resampled_clear = resampler(original_waveform.to("cuda"))
-        noisy_waveform = add_noise(resampled_clear)
-        if resampled_clear.size()[0] < sample_size:
-            continue
-        # print(f"resampled_clear: {resampled_clear.size()}, noisy_waveform: {noisy_waveform.size()}")
-        resampled_clear_subsamples = overlapping_samples(resampled_clear, sample_size=sample_size, overlap_size=overlap_size)
-        noisy_subsamples = overlapping_samples(noisy_waveform, sample_size=sample_size, overlap_size=overlap_size)
-        if resampled_clear_subsamples_aggregate is not None:
-            resampled_clear_subsamples_aggregate = torch.cat([resampled_clear_subsamples_aggregate, resampled_clear_subsamples], dim=0)
-            noisy_subsamples_aggregate = torch.cat([noisy_subsamples_aggregate, noisy_subsamples], dim=0)
-        else:
-            resampled_clear_subsamples_aggregate = resampled_clear_subsamples
-            noisy_subsamples_aggregate = noisy_subsamples
+    original_path = data[2]["path"][0]
+    original_path_no_ext = original_path.removesuffix(".mp3")
+    # print(f"original_path: {original_path} original_path_no_ext: {original_path_no_ext}")
 
-    noisy_batches = better_split_discard_remainder(noisy_subsamples_aggregate, consumption_batch_size)
-    clear_batches = better_split_discard_remainder(resampled_clear_subsamples_aggregate, consumption_batch_size)
-    
-    # print(f"len(noisy_batches): {len(noisy_batches)}, len(clear_batches): {len(clear_batches)}, resampled_clear_subsamples_aggregate: {resampled_clear_subsamples_aggregate.size()}, noisy_subsamples_aggregate: {noisy_subsamples_aggregate.size()}")
+    if num_processed.value % 500 == 0 and num_processed.value != 0:
+        t1 = time.time()
+        elapsed = t1 - t0
+        files_per_second = num_processed.value / elapsed
+        print(
+            f"Processed {num_processed.value}/{data_loader_len} files "
+            f"({num_processed.value / data_loader_len * 100:.0f}%). "
+            f"Elapsed: {elapsed:.0f}s. "
+            f"Files/second: {files_per_second:.0f}. "
+            f"Remaining estimated hours: {(data_loader_len - num_processed.value) / files_per_second / 60 / 60:.2f}")
+
+    num_processed.value += 1
+
+    original_waveform = data[0].squeeze()
+    # with resample_lock:
+    if original_waveform.size()[0] < sample_size:
+        return []
+
+    original_waveform = original_waveform.to("cuda")
+    noisy_waveform = add_noise(original_waveform)
+
+    # print(f"original_waveform: {original_waveform.size()}, noisy_waveform: {noisy_waveform.size()}")
+    clear_subsamples = overlapping_samples(original_waveform, sample_size=sample_size, overlap_size=overlap_size)
+    noisy_subsamples = overlapping_samples(noisy_waveform, sample_size=sample_size, overlap_size=overlap_size)
+    # if clear_subsamples_aggregate is not None:
+    #     clear_subsamples_aggregate = torch.cat([clear_subsamples_aggregate, clear_subsamples], dim=0)
+    #     noisy_subsamples_aggregate = torch.cat([noisy_subsamples_aggregate, noisy_subsamples], dim=0)
+    # else:
+    #     clear_subsamples_aggregate = clear_subsamples
+    #     noisy_subsamples_aggregate = noisy_subsamples
+
+    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+    # print(f"len(noisy_batches): {len(noisy_batches)}, len(clear_batches): {len(clear_batches)}, clear_subsamples_aggregate: {clear_subsamples_aggregate.size()}, noisy_subsamples_aggregate: {noisy_subsamples_aggregate.size()}")
 
     clips_dir = f"{out_dataset_directory}/{megachunk_idx}/clips"
     pathlib.Path(clips_dir).mkdir(parents=True, exist_ok=True)
 
     write_dicts = []
-    for idx, (noisy_batch, clear_batch) in enumerate(zip(noisy_batches, clear_batches)):
-        relative_path = f"{megachunk_idx}/clips/{batch_idx}_{idx}.opus"
+    relative_path = f"{megachunk_idx}/clips/{original_path_no_ext}.opus"
 
-        path_absolute = f"{out_dataset_directory}/{megachunk_idx}/clips/{batch_idx}_{idx}.opus"
-        
-        # print(f"noisy_batch: {noisy_batch.size()}, clear_batch: {clear_batch.size()}")
+    path_absolute = f"{out_dataset_directory}/{megachunk_idx}/clips/{original_path_no_ext}.opus"
 
-        noisy_full = noisy_batch.reshape(-1)
-        clear_full = clear_batch.reshape(-1)
+    # print(f"noisy_batch: {noisy_batch.size()}, clear_batch: {clear_batch.size()}")
 
-        two_channels = torch.stack([noisy_full, clear_full], dim=0).permute(1, 0).to("cpu")
+    noisy_full = clear_subsamples.reshape(-1)
+    clear_full = noisy_subsamples.reshape(-1)
 
-        # print(f"two_channels: {two_channels.size()}")
+    two_channels = torch.stack([noisy_full, clear_full], dim=0).permute(1, 0).to("cpu")
 
-        torchaudio.save(
-            uri=path_absolute,
-            src=two_channels,
-            sample_rate=resample_rate,
-            format="opus",
-            channels_first=False,
-        )
+    # print(f"two_channels: {two_channels.size()}")
 
-        write_dicts.append({
-            "path": relative_path,
-        })
+    # Save two_channels to path_absolute using ffmpeg-python
+    # (ffmpeg.input('pipe:0', format='f32le', ac=2, ar=resample_rate, loglevel='fatal')
+    #  .output(path_absolute, codec='libopus', format='opus').run(input=two_channels.numpy().tobytes()))
+
+    # (ffmpeg.input('pipe:0', format='f32le', ac=2, ar=resample_rate, loglevel='fatal')
+    #  .output(path_absolute, codec='libopus', format='opus')
+    #  .run_async(pipe_stdin=True)
+    #  .stdin.write(two_channels.numpy().tobytes())
+    #  .stdin.close())
+
+    torchaudio.save(
+        uri=path_absolute,
+        src=two_channels,
+        sample_rate=resample_rate,
+        format="opus",
+        channels_first=False,
+    )
+
+    write_dicts.append({
+        "path": relative_path,
+    })
 
     return write_dicts
 
@@ -232,10 +248,12 @@ def process_data():
     test_datasets = []
     for loc_dir in localization_subdirectories:
         localized_input_base_dir = base_dataset_directory + "/" + loc_dir
+        if "en" not in loc_dir:
+            continue
         
         print(localized_input_base_dir)
 
-        train_dataset = torchaudio.datasets.COMMONVOICE(root=localized_input_base_dir)
+        train_dataset = torchaudio.datasets.COMMONVOICE(root=localized_input_base_dir, tsv="validated.tsv")
         train_datasets.append(train_dataset)
         
         test_dataset = torchaudio.datasets.COMMONVOICE(root=localized_input_base_dir, tsv="test.tsv")
@@ -272,17 +290,16 @@ def process_data():
 
     def write_info_csv(directory):
         with open(f"{directory}/info.csv", 'w', newline='\n') as csvfile:
-            fieldnames = ['sample_rate', 'sample_size', 'overlap_size', 'consumption_batch_size']
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerow({
+            info_field_names = ['sample_rate', 'sample_size', 'overlap_size']
+            info_writer = csv.DictWriter(csvfile, fieldnames=info_field_names)
+            info_writer.writeheader()
+            info_writer.writerow({
                 "sample_rate": resample_rate,
                 "sample_size": sample_size,
                 "overlap_size": overlap_size,
-                "consumption_batch_size": consumption_batch_size
             })
             
-    # write_info_csv(train_out_dataset_directory)
+    write_info_csv(train_out_dataset_directory)
     write_info_csv(test_out_dataset_directory)
 
     train_enumerated_batched_iter = EnumeratedIter(itertools.batched(train_data_loader, process_batch_size))
@@ -293,18 +310,18 @@ def process_data():
     test_zipped_dataset = zip(
         test_enumerated_batched_iter, test_chunk_iter, itertools.repeat((test_data_loader_len, t0, sample_size, overlap_size, resample_rate, test_out_dataset_directory)))
 
-    # write_path = f"{train_out_dataset_directory}/train.csv"
-    # with open(write_path, 'w', newline='\n') as csvfile:
-    #     fieldnames = ['path']
-    #     writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-    #
-    #     with Pool(processes=process_count) as pool:
-    #         for write_dicts in pool.imap_unordered(process_file, train_zipped_dataset, chunksize=8):
-    #             for write_dict in write_dicts:
-    #                 writer.writerow(write_dict)
+    train_write_path = f"{train_out_dataset_directory}/train.csv"
+    with open(train_write_path, 'w', newline='\n') as csvfile:
+        fieldnames = ['path']
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
-    write_path = f"{test_out_dataset_directory}/test.csv"
-    with open(write_path, 'w', newline='\n') as csvfile:
+        with Pool(processes=process_count) as pool:
+            for write_dicts in pool.imap_unordered(process_file, train_zipped_dataset, chunksize=8):
+                for write_dict in write_dicts:
+                    writer.writerow(write_dict)
+
+    test_write_path = f"{test_out_dataset_directory}/test.csv"
+    with open(test_write_path, 'w', newline='\n') as csvfile:
         fieldnames = ['path']
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 

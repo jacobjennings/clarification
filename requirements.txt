@@ -17,3 +17,5 @@ auraloss
 vastai
 netron
 b2
+ffmpeg-python
+

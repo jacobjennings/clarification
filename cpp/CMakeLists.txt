@@ -3,16 +3,20 @@ project(cpp)
 
 include(FetchContent)
 
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CUDA_ARCHITECTURES "86;89;90")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
+set(CMAKE_VERBOSE_MAKEFILE ON CACHE BOOL "Enable verbose output" FORCE)
+
+find_package(ZLIB REQUIRED)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(LIBOPUS REQUIRED opus)
+
 #get_cmake_property(_variableNames VARIABLES)
 #list (SORT _variableNames)
 #foreach (_variableName ${_variableNames})
 #    message(STATUS "${_variableName}=${${_variableName}}")
 #endforeach()
-
-set(CMAKE_CXX_STANDARD 20)
-set(CMAKE_CUDA_ARCHITECTURES "86;89;90")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
-set(CMAKE_VERBOSE_MAKEFILE ON CACHE BOOL "Enable verbose output" FORCE)
 
 FetchContent_Declare(
         pytorch
@@ -64,7 +68,10 @@ execute_process(
         ./configure --prefix=${FFMPEG_INSTALL_DIR}
         --enable-static
         --disable-shared
+        --disable-vaapi
         --enable-libopus
+        --extra-cflags="-I/usr/local/include"
+        --extra-ldflags="-L/usr/local/lib"
         WORKING_DIRECTORY ${ffmpeg_SOURCE_DIR}
         RESULT_VARIABLE FFMPEG_CONFIGURE_RESULT
 )
@@ -95,10 +102,6 @@ target_include_directories(clarification-dataloader PRIVATE
         ${FFMPEG_INSTALL_DIR}/include
 )
 
-find_package(ZLIB REQUIRED)
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(LIBOPUS REQUIRED opus)
-
 set(FFMPEG_LIBRARIES
         ${LIBOPUS_LIBRARIES}
         ZLIB::ZLIB
@@ -119,11 +122,12 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(googletest)
 
-
 target_link_libraries(clarification-dataloader
+        -pthread -lvdpau -lX11 -lm -latomic -lX11 -lbz2 -lz
         ${FFMPEG_LIBRARIES}
         ${TORCH_LIBRARIES}
         ${TORCHAUDIO_LIBRARY}
+        ${X11_LIBRARIES}
 )
 
 add_executable(clarification-tests
@@ -139,9 +143,11 @@ target_include_directories(clarification-tests PRIVATE
 )
 
 target_link_libraries(clarification-tests PRIVATE
+        -pthread -lvdpau -lX11 -lm -latomic -lX11 -lbz2 -lz
         ${FFMPEG_LIBRARIES}
         ${TORCH_LIBRARIES}
         ${TORCHAUDIO_LIBRARY}
+        ${X11_LIBRARIES}
         gtest
         gtest_main
 )

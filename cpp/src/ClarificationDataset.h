@@ -5,7 +5,7 @@
 #ifndef CLARIFICATIONDATASET_H
 #define CLARIFICATIONDATASET_H
 
-
+#include <omp.h>
 #include <filesystem>
 #include <iostream>
 #include <fstream>
@@ -99,6 +99,8 @@ public:
             sample_infos.push_back({path});
         }
     }
+
+    // torch::Tensor get(const size_t batch_idx) override {
 
     torch::Tensor get(const size_t batch_idx) override {
         torch::NoGradGuard no_grad;
