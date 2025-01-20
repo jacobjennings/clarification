@@ -438,11 +438,12 @@ private:
         // Create tensors for each channel from the map using std::views::values
         std::vector<torch::Tensor> audio_tensors;
         for (const auto &audio_data: audio_data_map | std::views::values) {
-            audio_tensors.push_back(torch::from_blob(
+            auto audio_tensor = torch::from_blob(
                 const_cast<float *>(audio_data.data()),
                 {static_cast<long>(audio_data.size())},
-                torch::TensorOptions().dtype(torch::kFloat).device(device_)
-            ).clone());
+                torch::TensorOptions().dtype(torch::kFloat)
+            ).clone().to(device_);
+            audio_tensors.push_back(audio_tensor);
         }
 
         // Verify that we have data for all channels
