@@ -36,8 +36,9 @@ TEST(ClarificationDatasetTest, PerformanceBenchmark) {
 
     constexpr int kBatchSize = 16;
     constexpr int kNumPreloadBatches = 16;
+    constexpr int kNumThreads = 128;
     ClarificationDataset dataset(
-        device, base_dir, csv_filename, kNumPreloadBatches, kBatchSize, 16);
+        device, base_dir, csv_filename, kNumPreloadBatches, kBatchSize, kNumThreads);
 
     // Wait for 4 seconds to allow preloading to saturate.
     std::this_thread::sleep_for(std::chrono::seconds(4));
@@ -56,7 +57,7 @@ TEST(ClarificationDatasetTest, PerformanceBenchmark) {
     ASSERT_FALSE(torch::allclose(first_batch, second_batch)); // Should be different
 
     // 3. Performance benchmark
-    constexpr long kNumBatchesToTest = 3000;
+    constexpr long kNumBatchesToTest = 10000;
     const auto start = std::chrono::high_resolution_clock::now();
     for (size_t i = 0; i < kNumBatchesToTest; ++i) {
         const auto data = dataset.next();
