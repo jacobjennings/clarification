@@ -8,6 +8,9 @@ set(CMAKE_CUDA_ARCHITECTURES "86;89;90")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
 set(CMAKE_VERBOSE_MAKEFILE ON CACHE BOOL "Enable verbose output" FORCE)
 
+# Find OpenMP
+find_package(OpenMP REQUIRED)
+
 find_package(ZLIB REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(LIBOPUS REQUIRED opus)
@@ -47,8 +50,8 @@ target_include_directories(clarification-dataloader PRIVATE
 # Download FFmpeg
 FetchContent_Declare(
         ffmpeg
-#        GIT_REPOSITORY https://git.ffmpeg.org/ffmpeg.git
-#        GIT_TAG release/6.1
+        #        GIT_REPOSITORY https://git.ffmpeg.org/ffmpeg.git
+        #        GIT_TAG release/6.1
         GIT_REPOSITORY https://github.com/jacobjennings/FFmpeg.git
         GIT_TAG 13a9494c108beb08cb88fd2161c0de93a8dcb179
 )
@@ -122,12 +125,14 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(googletest)
 
+# Link OpenMP
 target_link_libraries(clarification-dataloader
         -pthread -lvdpau -lX11 -lm -latomic -lX11 -lbz2 -lz
         ${FFMPEG_LIBRARIES}
         ${TORCH_LIBRARIES}
         ${TORCHAUDIO_LIBRARY}
         ${X11_LIBRARIES}
+        $<$<BOOL:${OpenMP_FOUND}>:OpenMP::OpenMP_CXX> # Conditionally link OpenMP
 )
 
 add_executable(clarification-tests
@@ -150,6 +155,7 @@ target_link_libraries(clarification-tests PRIVATE
         ${X11_LIBRARIES}
         gtest
         gtest_main
+        $<$<BOOL:${OpenMP_FOUND}>:OpenMP::OpenMP_CXX> # Conditionally link OpenMP
 )
 
 

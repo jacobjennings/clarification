@@ -8,34 +8,42 @@
 #include <gtest/gtest.h>
 #include "../src/ClarificationDataset.h"
 #include <chrono>
+#include <thread> // Required for std::this_thread::sleep_for
 
 TEST(ClarificationDatasetTest, PerformanceBenchmark) {
-    const size_t batch_size = 32;
     const torch::Device device(torch::kCPU);
-    const std::string base_dir = "/workspace/mounted_image/noisy-commonvoice-24k-300ms-5ms-opus/train";
-    const std::string csv_filename = "train.csv";
+    const std::string base_dir = "/workspace/noisy-commonvoice-24k-300ms-2ms-opus-4-en/test"; // Replace with your dataset path
+    const std::string csv_filename = "test.csv";
 
-    ClarificationDataset dataset(batch_size, device, base_dir, csv_filename);
+    constexpr int batch_size = 16;
+    constexpr int num_preload_batches = 16;
+    ClarificationDataset dataset(
+        device, base_dir, csv_filename, ClarificationDataset::Mode::Batch, num_preload_batches, batch_size, 16);
 
-    // testing::internal::CaptureStdout();
+    // Wait for 4 seconds to allow preloading to saturate
+    std::this_thread::sleep_for(std::chrono::seconds(4));
 
-    const long num_batches_to_test = 100;
+    // Get the first batch
+    const auto first_batch = dataset.next();
+
+    // 1. Validate dimensions of the first output
+    std::cout << "First batch sizes: " << first_batch.sizes() << std::endl;
+    ASSERT_EQ(first_batch.size(0), batch_size);       // Check batch size (number of frames)
+    ASSERT_EQ(first_batch.size(1), 2);  // Check number of channels (should be 2 for noisy and clean)
+    ASSERT_EQ(first_batch.size(2), dataset.sample_size);  // Check number of samples per frame (should be 7200 in your case)
+
+    // 2. Performance benchmark (rest of the test)
+    constexpr long num_batches_to_test = 10;
     const auto start = std::chrono::high_resolution_clock::now();
     for (size_t i = 0; i < num_batches_to_test; ++i) {
-        const auto data = dataset.get(0);
+        const auto data = dataset.next();
     }
     const auto end = std::chrono::high_resolution_clock::now();
 
-    // std::string output = testing::internal::GetCapturedStdout();
-    // std::cout << output << std::endl;
-
     const std::chrono::duration<double> duration = end - start;
-    // Print batches per second
-    std::cout << "Batches per second: " << num_batches_to_test / duration.count() << std::endl;
+    std::cout << "Frames per second: " << (num_batches_to_test * batch_size) / duration.count() << std::endl;
 
     ASSERT_GT(duration.count(), 0);
 }
-
-
 
 #endif //CLARIFICATIONDATASETTEST_H

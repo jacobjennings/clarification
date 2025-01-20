@@ -1,20 +1,23 @@
 //
-// Created by jacob on 1/12/25.
+// Created by Jacob Jennings on 1/12/25.
 //
 
 #ifndef CLARIFICATIONDATASET_H
 #define CLARIFICATIONDATASET_H
 
 #include <omp.h>
+
+#include <algorithm>
 #include <filesystem>
-#include <iostream>
 #include <fstream>
-#include <vector>
-#include <string>
+#include <future>
+#include <iostream>
+#include <ranges>
 #include <sstream>
+#include <string>
+#include <vector>
+
 #include <torch/torch.h>
-#include <locale>
-#include <codecvt>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -22,28 +25,49 @@ extern "C" {
 #include <libavutil/avutil.h>
 }
 
-class ClarificationDataset final : public torch::data::Dataset<ClarificationDataset, torch::Tensor> {
+class ClarificationDataset final {
 public:
-    ClarificationDataset(
-        size_t batch_size,
+    enum class Mode {
+        File,
+        Batch
+    };
+
+    explicit ClarificationDataset(
         torch::Device device,
         const std::string &base_dir,
-        const std::string &csv_filename
-    ) : base_dir(base_dir), device(device) {
-        auto info_csv_path = std::filesystem::path(base_dir) / "info.csv";
+        const std::string &csv_filename,
+        Mode mode = Mode::File,
+        int num_preload_batches = 16,
+        int batch_size = 16,
+        int num_threads = 0
+    ) : device_(device),
+        mode_(mode),
+        num_preload_batches_(num_preload_batches),
+        batch_size_(batch_size),
+        num_threads_(num_threads),
+        base_dir_(base_dir) {
+        if (mode == Mode::Batch && batch_size <= 0) {
+            throw std::invalid_argument("batch_size must be > 0 in Batch mode");
+        }
+
+        if (num_threads > 0) {
+            omp_set_num_threads(num_threads);
+        }
+
+        auto info_csv_path = std::filesystem::path(base_dir_) / "info.csv";
         std::ifstream csvfile(info_csv_path);
 
         av_log_set_level(AV_LOG_FATAL);
 
         const AVCodec *codec = nullptr;
-        void *iter = nullptr;
-        while ((codec = av_codec_iterate(&iter))) {
+        void *i = nullptr;
+        while ((codec = av_codec_iterate(&i)) != nullptr) {
             if (std::string(codec->name).find("opus") != std::string::npos) {
                 std::cout << "ffmpeg reports opus presence: " << codec->name << std::endl;
                 break;
             }
         }
-        if (!codec || std::string(codec->name).find("opus") == std::string::npos) {
+        if (codec == nullptr || std::string(codec->name).find("opus") == std::string::npos) {
             throw std::runtime_error("opus codec not found");
         }
 
@@ -62,26 +86,16 @@ public:
         std::stringstream ss(line);
         std::string value;
         std::getline(ss, value, ',');
-        sample_rate = std::stoi(value);
+        sample_rate_ = std::stoi(value);
         std::getline(ss, value, ',');
         sample_size = std::stoi(value);
         std::getline(ss, value, ',');
-        overlap_size = std::stoi(value);
-        std::getline(ss, value, ',');
-        consumption_batch_size = std::stoi(value);
+        overlap_size_ = std::stoi(value);
 
-        this->batch_size = batch_size;
-        if (this->batch_size % this->consumption_batch_size != 0) {
-            throw std::runtime_error("batch_size must be a multiple of consumption_batch_size");
-        }
+        std::cout << "ClarificationDataset initialized with sample_rate: " << sample_rate_ << ", sample_size: " <<
+                sample_size << ", overlap_size: " << overlap_size_ << std::endl;
 
-        consumption_batches_multiplier = this->batch_size / this->consumption_batch_size;
-
-        std::cout << "ClarificationDataset initialized with sample_rate: " << sample_rate << ", sample_size: " <<
-        sample_size << ", overlap_size: " << overlap_size << ", consumption_batch_size: " <<
-        consumption_batch_size << ", consumption_batches_multiplier: " << consumption_batches_multiplier << std::endl;
-
-        auto samples_csv_path = std::filesystem::path(base_dir) / csv_filename;
+        auto samples_csv_path = std::filesystem::path(base_dir_) / csv_filename;
         std::cout << "Path to samples.csv: " << samples_csv_path << std::endl;
         std::ifstream samples_csv(samples_csv_path);
 
@@ -96,189 +110,378 @@ public:
             std::getline(strs, path, ',');
             std::erase(path, '\n');
             std::erase(path, '\r');
-            sample_infos.push_back({path});
+            sample_infos_.push_back({path});
         }
+
+        PreloadBatches();
     }
 
-    // torch::Tensor get(const size_t batch_idx) override {
-
-    torch::Tensor get(const size_t batch_idx) override {
+    torch::Tensor next() {
         torch::NoGradGuard no_grad;
-        // TODO calculate
-        constexpr auto expected_size = 7200;
-        torch::Tensor audio_aggregated;
-        for (long i = 0; i < consumption_batches_multiplier; ++i) {
-            const long consumption_batch_idx = batch_idx * consumption_batches_multiplier + i;
-            const auto &sample_info = sample_infos[consumption_batch_idx];
-            const std::filesystem::path absolute_path = std::filesystem::path(base_dir) / sample_info.path;
-            auto absolute_path_string = absolute_path.string();
 
-            // Use ffmpeg to load the opus file at absolute_path at sample_rate into a tensor named audio.
-            AVFormatContext *format_context = avformat_alloc_context();
-
-            if (const AVInputFormat *input_format = av_find_input_format("ogg"); !input_format) {
-                throw std::runtime_error("Input format ogg not found");
-            }
-
-            if (const auto open_input_error = avformat_open_input(&format_context, absolute_path_string.c_str(),
-                                                                  nullptr, nullptr); open_input_error != 0) {
-                char error_buf[256] = {0};
-                const auto error_string = std::string(
-                    av_make_error_string(error_buf, sizeof(error_buf), open_input_error));
-                std::cout << "Error opening input: " << error_string << std::endl;
-                std::string error_message = "Failed to open audio file ";
-                error_message += absolute_path_string;
-                error_message += ", msg: ";
-                error_message += error_string;
-                throw std::runtime_error(error_message);
-            }
-
-            if (avformat_find_stream_info(format_context, nullptr) < 0) {
-                throw std::runtime_error("Failed to retrieve stream info");
-            }
-
-            // Find the audio stream
-            int audio_stream_index = -1;
-            const AVCodecParameters *codec_params = nullptr;
-            for (unsigned int stream_idx = 0; stream_idx < format_context->nb_streams; ++stream_idx) {
-                codec_params = format_context->streams[stream_idx]->codecpar;
-                if (codec_params->codec_type == AVMEDIA_TYPE_AUDIO) {
-                    audio_stream_index = stream_idx;
-                    break;
+        if (mode_ == Mode::File) {
+            if (preloaded_files_.empty()) {
+                if (file_idx_ >= sample_infos_.size()) {
+                    throw std::out_of_range("End of dataset reached");
+                } else {
+                    // Should only get here if preloading was too slow
+                    std::cerr << "Warning: Preloading fell behind. Consider increasing num_preload_batches_." <<
+                            std::endl;
+                    PreloadBatches();
                 }
             }
-            if (audio_stream_index == -1) {
-                throw std::runtime_error("Failed to find audio stream");
+
+            if (preloaded_files_.empty()) {
+                throw std::out_of_range("End of dataset reached");
             }
 
-            // Find and open the libopus decoder
-            const AVCodec *codec = avcodec_find_decoder_by_name("libopus");
-            if (!codec) {
-                throw std::runtime_error("Failed to find libopus codec");
-            }
-            AVCodecContext *codec_context = avcodec_alloc_context3(codec);
-            if (!codec_context) {
-                throw std::runtime_error("Failed to allocate codec context");
-            }
-            if (avcodec_parameters_to_context(codec_context, codec_params) < 0) {
-                throw std::runtime_error("Failed to copy codec parameters to context");
-            }
+            auto file_tensor = preloaded_files_.front();
+            preloaded_files_.pop();
+            file_idx_++;
 
-            // Set the desired output sample rate
-            codec_context->sample_rate = sample_rate;
-            codec_context->request_sample_fmt = AV_SAMPLE_FMT_FLT;
-            if (avcodec_open2(codec_context, codec, nullptr) < 0) {
-                throw std::runtime_error("Failed to open codec");
-            }
+            PreloadBatchesAsyncIfNotActive();
 
-            // Confirm the sample rate and throw exception if it does not match (not my ffmpeg fork)
-            if (codec_context->sample_rate != sample_rate) {
-                throw std::runtime_error("Sample rate mismatch");
-            }
-
-            // Decode frames
-            AVPacket *packet = av_packet_alloc();
-            AVFrame *frame = av_frame_alloc();
-            std::vector<float> audio_data;
-            while (av_read_frame(format_context, packet) >= 0) {
-                if (packet->stream_index == audio_stream_index) {
-                    if (avcodec_send_packet(codec_context, packet) == 0) {
-                        decode_audio_frames(codec_context, packet, frame, audio_data);
-                    }
+            return file_tensor;
+        } else {
+            // Mode::Batch
+            if (!preloaded_batch_tensor_.numel() || frame_idx_ >= preloaded_batch_tensor_.size(0)) {
+                if (file_idx_ >= sample_infos_.size()) {
+                    throw std::out_of_range("End of dataset reached");
+                } else {
+                    // Should only get here if preloading was too slow or the preloaded tensor is empty
+                    std::cerr << "Warning: Preloading fell behind or preloaded tensor is empty." << std::endl;
+                    PreloadBatches();
                 }
-                av_packet_unref(packet);
             }
 
-            // Flush the decoder
-            avcodec_send_packet(codec_context, nullptr);
-            while (avcodec_receive_frame(codec_context, frame) == 0) {
-                avcodec_send_packet(codec_context, nullptr);
-                decode_audio_frames(codec_context, packet, frame, audio_data);
+            if (!preloaded_batch_tensor_.numel()) {
+                throw std::out_of_range("End of dataset reached");
             }
 
-            // Clean up
-            av_frame_free(&frame);
-            av_packet_free(&packet);
-            avcodec_free_context(&codec_context);
-            avformat_close_input(&format_context);
+            // Extract the next `batch_size_` frames
+            const int start_frame = frame_idx_;
+            const int end_frame = std::min(start_frame + batch_size_,
+                                           static_cast<int>(preloaded_batch_tensor_.size(0)));
 
-            // Create the tensor
-            const auto audio = torch::from_blob(audio_data.data(), {static_cast<long>(audio_data.size())},
-                                                torch::TensorOptions().dtype(torch::kFloat).device(torch::kCPU));
-            if (i == 0) {
-                // initialize with cpu device
-
-                audio_aggregated = torch::empty({consumption_batches_multiplier, static_cast<long>(audio_data.size())},
-                                                torch::TensorOptions().dtype(torch::kFloat).device(torch::kCPU));
+            if (start_frame >= end_frame) {
+                // No more frames available, reset and throw
+                frame_idx_ = 0;
+                preloaded_batch_tensor_ = torch::Tensor(); // Reset the tensor
+                throw std::out_of_range("End of dataset reached and tensor reset");
             }
-            audio_aggregated[i] = audio;
-        }
 
-        // std::cout << "Device: " << device << std::endl;
-        // audio_aggregated = audio_aggregated.to(device);
+            torch::Tensor extracted_batch = preloaded_batch_tensor_.narrow(
+                0, start_frame, end_frame - start_frame);
 
-        const auto total_size = audio_aggregated.size(1);
-        const auto truncated_size = (total_size / sample_size) * sample_size; // Largest multiple of sample_size
+            // Update the frame index for the next call to next()
+            frame_idx_ += extracted_batch.size(0);
 
-        // Truncate the tensor
-        const auto truncated_audio = audio_aggregated.narrow(1, 0, truncated_size);
-
-        // Split and stack
-        auto audio_samples = torch::stack(truncated_audio.split(sample_size, /*dim=*/1));
-
-        return audio_samples;
-    }
-
-    static void check_bad_chars(const std::string &str) {
-        for (const char ch: str) {
-            if (!std::isalnum(ch) && ch != '/' && ch != '\\' && ch != '-' && ch != '_' && ch != '.') {
-                std::cout << "Invalid character code in str: " << static_cast<int>(ch) << " at index " << str.find(ch)
-                        << ". Length: " << std::to_string(str.length()) << std::endl;
+            // If we've extracted all frames from the preloaded tensor, reset it
+            if (frame_idx_ >= preloaded_batch_tensor_.size(0)) {
+                preloaded_batch_tensor_ = torch::Tensor(); // Reset to an empty tensor
             }
+
+            PreloadBatchesAsyncIfNotActive();
+
+            return extracted_batch.view({batch_size_, 2, sample_size});
         }
     }
 
-    static void decode_audio_frames(AVCodecContext *codec_context, AVPacket *packet, AVFrame *frame,
-                                    std::vector<float> &audio_data) {
-        while (avcodec_receive_frame(codec_context, frame) == 0) {
-            if (frame->format == AV_SAMPLE_FMT_FLTP) {
-                for (int i = 0; i < frame->nb_samples; ++i) {
-                    for (int ch = 0; ch < codec_context->ch_layout.nb_channels; ++ch) {
-                        const auto *data = (float *) frame->data[ch];
-                        audio_data.push_back(data[i]);
-                    }
-                }
-            } else if (frame->format == AV_SAMPLE_FMT_FLT) {
-                const auto *data = (float *) frame->data[0];
-                for (int i = 0; i < frame->nb_samples * codec_context->ch_layout.nb_channels; ++i) {
-                    audio_data.push_back(data[i]);
-                }
-            } else {
-                throw std::runtime_error("Unsupported audio format");
-            }
-        }
-    }
-
-    [[nodiscard]] torch::optional<size_t> size() const override {
-        return sample_infos.size() / consumption_batches_multiplier;
-    }
+    int sample_size = 0;
 
 private:
-    std::string base_dir;
-    torch::Device device;
-    int sample_rate;
-    int sample_size;
-    int overlap_size;
-    int consumption_batch_size;
-    long batch_size;
-    long consumption_batches_multiplier;
+    std::string base_dir_;
+    torch::Device device_;
+    int sample_rate_ = 0;
+    int overlap_size_ = 0;
+    int file_idx_ = 0;
+    int frame_idx_ = 0;
+    int num_preload_batches_ = 0;
+    int batch_size_ = 0;
+    Mode mode_ = Mode::File;
+    int num_threads_ = 0;
 
     struct SampleInfo {
         std::string path;
     };
 
-    std::vector<SampleInfo> sample_infos;
+    std::vector<SampleInfo> sample_infos_;
+    torch::Tensor preloaded_batch_tensor_;
+    std::queue<torch::Tensor> preloaded_files_;
+    std::future<void> preload_future_;
+
+    void PreloadBatches() {
+        if (mode_ == Mode::File) {
+            const int start_file_idx = file_idx_;
+            const int end_file_idx = std::min(file_idx_ + num_preload_batches_, static_cast<int>(sample_infos_.size()));
+            for (int i = start_file_idx; i < end_file_idx; ++i) {
+                const auto &[path] = sample_infos_[i];
+                const std::filesystem::path absolute_path = std::filesystem::path(base_dir_) / path;
+                auto absolute_path_string = absolute_path.string();
+                torch::Tensor audio_samples = ProcessAudioFile(absolute_path_string);
+                preloaded_files_.push(audio_samples);
+            }
+        } else {
+            // Mode::Batch
+            // Determine the starting file index based on the current frame index
+            if (!preloaded_batch_tensor_.numel() || frame_idx_ >= preloaded_batch_tensor_.size(0)) {
+                frame_idx_ = 0; // Reset frame index when starting a new preloading cycle
+                int cumulative_frames = 0;
+                for (int i = 0; i < sample_infos_.size(); ++i) {
+                    const auto &[path] = sample_infos_[i];
+                    const std::filesystem::path absolute_path = std::filesystem::path(base_dir_) / path;
+                    auto absolute_path_string = absolute_path.string();
+                    const int num_frames = GetNumFramesInAudioFile(absolute_path_string);
+                    cumulative_frames += num_frames;
+                    if (cumulative_frames > file_idx_) {
+                        file_idx_ = i;
+                        break;
+                    }
+                }
+            }
+
+            // Load files until we have enough frames for the requested number of batches
+            int current_batch_frames = 0;
+            while (current_batch_frames < num_preload_batches_ * batch_size_ && file_idx_ < sample_infos_.size()) {
+                const auto &[path] = sample_infos_[file_idx_];
+                const std::filesystem::path absolute_path = std::filesystem::path(base_dir_) / path;
+                auto absolute_path_string = absolute_path.string();
+
+                torch::Tensor audio_samples = ProcessAudioFile(absolute_path_string);
+
+                // Append the new frames to the preloaded_batch_tensor_
+                if (preloaded_batch_tensor_.numel()) {
+                    preloaded_batch_tensor_ = torch::cat({preloaded_batch_tensor_, audio_samples}, 0);
+                } else {
+                    preloaded_batch_tensor_ = audio_samples;
+                }
+                current_batch_frames += audio_samples.size(0);
+
+                file_idx_++;
+                // Print information about this preloading run including file index, batch tensor size, etc.
+                std::cout << "Preloading file index: " << file_idx_ << ", preloaded batch tensor size: " << preloaded_batch_tensor_.sizes() << std::endl;
+            }
+        }
+    }
+
+    // Helper function to get the number of audio frames in a file
+    [[nodiscard]] int GetNumFramesInAudioFile(const std::string &absolute_path_string) const {
+        AVFormatContext *format_context = avformat_alloc_context();
+        if (format_context == nullptr) {
+            return -1; // Indicate an error
+        }
+
+        if (avformat_open_input(&format_context, absolute_path_string.c_str(), nullptr, nullptr) != 0) {
+            avformat_free_context(format_context);
+            return -1; // Error opening file
+        }
+
+        if (avformat_find_stream_info(format_context, nullptr) < 0) {
+            avformat_close_input(&format_context);
+            return -1; // Error finding stream info
+        }
+
+        int audio_stream_index = -1;
+        for (unsigned int i = 0; i < format_context->nb_streams; i++) {
+            if (format_context->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) {
+                audio_stream_index = i;
+                break;
+            }
+        }
+
+        if (audio_stream_index == -1) {
+            avformat_close_input(&format_context);
+            return -1; // No audio stream found
+        }
+
+        const AVStream *audio_stream = format_context->streams[audio_stream_index];
+        int num_frames = audio_stream->nb_frames;
+        if (num_frames == 0) {
+            // Estimate the number of frames based on duration and frame rate
+            if (audio_stream->duration != AV_NOPTS_VALUE && audio_stream->r_frame_rate.num != 0 && audio_stream->
+                r_frame_rate.den != 0) {
+                const double duration_in_seconds = static_cast<double>(audio_stream->duration) * av_q2d(
+                                                       audio_stream->time_base);
+                const double frame_rate = av_q2d(audio_stream->r_frame_rate);
+                num_frames = static_cast<int>(duration_in_seconds * frame_rate);
+            }
+        }
+
+        avformat_close_input(&format_context);
+        return num_frames / sample_size;
+    }
+
+    [[nodiscard]] torch::Tensor ProcessAudioFile(const std::string &absolute_path_string) const {
+        // Use ffmpeg to load the opus file at absolute_path at sample_rate into a tensor named audio.
+        AVFormatContext *format_context = avformat_alloc_context();
+
+        if (const AVInputFormat *input_format = av_find_input_format("ogg"); input_format == nullptr) {
+            throw std::runtime_error("Input format ogg not found");
+        }
+
+        if (const auto open_input_error = avformat_open_input(&format_context, absolute_path_string.c_str(),
+                                                              nullptr, nullptr); open_input_error != 0) {
+            char error_buf[256] = {0};
+            const auto error_string = std::string(
+                av_make_error_string(error_buf, sizeof(error_buf), open_input_error));
+            std::cout << "Error opening input: " << error_string << std::endl;
+            std::string error_message = "Failed to open audio file ";
+            error_message += absolute_path_string;
+            error_message += ", msg: ";
+            error_message += error_string;
+            throw std::runtime_error(error_message);
+        }
+
+        if (avformat_find_stream_info(format_context, nullptr) < 0) {
+            throw std::runtime_error("Failed to retrieve stream info");
+        }
+
+        // Find the audio stream
+        int audio_stream_index = -1;
+        const AVCodecParameters *codec_params = nullptr;
+        for (unsigned int stream_idx = 0; stream_idx < format_context->nb_streams; ++stream_idx) {
+            codec_params = format_context->streams[stream_idx]->codecpar;
+            if (codec_params->codec_type == AVMEDIA_TYPE_AUDIO) {
+                audio_stream_index = stream_idx;
+                break;
+            }
+        }
+        if (audio_stream_index == -1) {
+            throw std::runtime_error("Failed to find audio stream");
+        }
+
+        // Find and open the libopus decoder
+        const AVCodec *codec = avcodec_find_decoder_by_name("libopus");
+        if (codec == nullptr) {
+            throw std::runtime_error("Failed to find libopus codec");
+        }
+        AVCodecContext *codec_context = avcodec_alloc_context3(codec);
+        if (codec_context == nullptr) {
+            throw std::runtime_error("Failed to allocate codec context");
+        }
+        if (avcodec_parameters_to_context(codec_context, codec_params) < 0) {
+            throw std::runtime_error("Failed to copy codec parameters to context");
+        }
+
+        // Set the desired output sample rate
+        codec_context->sample_rate = sample_rate_;
+        codec_context->request_sample_fmt = AV_SAMPLE_FMT_FLT;
+        if (avcodec_open2(codec_context, codec, nullptr) < 0) {
+            throw std::runtime_error("Failed to open codec");
+        }
+
+        // Confirm the sample rate and throw exception if it does not match
+        if (codec_context->sample_rate != sample_rate_) {
+            throw std::runtime_error("Sample rate mismatch");
+        }
+
+        // Decode frames
+        AVPacket *packet = av_packet_alloc();
+        AVFrame *frame = av_frame_alloc();
+
+        // Use a map to store audio data for each channel separately
+        std::map<int, std::vector<float> > audio_data_map;
+
+        while (av_read_frame(format_context, packet) >= 0) {
+            if (packet->stream_index == audio_stream_index) {
+                if (avcodec_send_packet(codec_context, packet) == 0) {
+                    while (avcodec_receive_frame(codec_context, frame) == 0) {
+                        // Determine if the frame is planar
+                        const bool is_planar = av_sample_fmt_is_planar(static_cast<AVSampleFormat>(frame->format));
+                        const int num_channels = codec_context->ch_layout.nb_channels;
+                        const int num_samples = frame->nb_samples;
+
+                        if (is_planar) {
+                            // Planar format: Data for each channel is in a separate plane.
+                            for (int ch = 0; ch < num_channels; ++ch) {
+                                const float *channel_data = reinterpret_cast<const float *>(frame->extended_data[ch]);
+                                for (int i = 0; i < num_samples; ++i) {
+                                    audio_data_map[ch].push_back(channel_data[i]);
+                                }
+                            }
+                        } else {
+                            // Non-planar format: Data for all channels is interleaved in a single plane.
+                            const float *interleaved_data = reinterpret_cast<const float *>(frame->extended_data[0]);
+                            for (int i = 0; i < num_samples; ++i) {
+                                for (int ch = 0; ch < num_channels; ++ch) {
+                                    audio_data_map[ch].push_back(interleaved_data[i * num_channels + ch]);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            av_packet_unref(packet);
+        }
+
+        // Flush the decoder
+        if (avcodec_send_packet(codec_context, nullptr) != 0) {
+            throw std::runtime_error("Error flushing the decoder");
+        }
+        while (avcodec_receive_frame(codec_context, frame) == 0) {
+            const bool is_planar = av_sample_fmt_is_planar(static_cast<AVSampleFormat>(frame->format));
+            const int num_channels = codec_context->ch_layout.nb_channels;
+            const int num_samples = frame->nb_samples;
+
+            if (is_planar) {
+                for (int ch = 0; ch < num_channels; ++ch) {
+                    const float *channel_data = reinterpret_cast<const float *>(frame->extended_data[ch]);
+                    for (int i = 0; i < num_samples; ++i) {
+                        audio_data_map[ch].push_back(channel_data[i]);
+                    }
+                }
+            } else {
+                const float *interleaved_data = reinterpret_cast<const float *>(frame->extended_data[0]);
+                for (int i = 0; i < num_samples; ++i) {
+                    for (int ch = 0; ch < num_channels; ++ch) {
+                        audio_data_map[ch].push_back(interleaved_data[i * num_channels + ch]);
+                    }
+                }
+            }
+        }
+
+        // Clean up
+        av_frame_free(&frame);
+        av_packet_free(&packet);
+        avcodec_free_context(&codec_context);
+        avformat_close_input(&format_context);
+
+        // Create tensors for each channel from the map using std::views::values
+        std::vector<torch::Tensor> audio_tensors;
+        for (const auto &audio_data: audio_data_map | std::views::values) {
+            audio_tensors.push_back(torch::from_blob(
+                const_cast<float *>(audio_data.data()),
+                {static_cast<long>(audio_data.size())},
+                torch::TensorOptions().dtype(torch::kFloat).device(device_)
+            ).clone());
+        }
+
+        // Verify that we have data for all channels
+        if (audio_tensors.size() != 2) {
+            throw std::runtime_error("Could not retrieve data for both channels.");
+        }
+
+        // Combine channels into a single tensor [1, channels, samples]
+        auto audio_combined = torch::stack(audio_tensors, 0).unsqueeze(0);
+
+        const auto total_size = audio_combined.size(2);
+        const auto truncated_size = (total_size / sample_size) * sample_size;
+
+        // Truncate the tensor
+        const auto truncated_audio = audio_combined.narrow(2, 0, truncated_size);
+
+        // Split and stack into [frames, channels, samples]
+        auto audio_samples = torch::stack(truncated_audio.split(sample_size, /*dim=*/2)).squeeze(1);
+
+        return audio_samples;
+    }
+
+    void PreloadBatchesAsyncIfNotActive() {
+        if (preload_future_.valid()) {
+            return;
+        }
+        preload_future_ = std::async(std::launch::async, &ClarificationDataset::PreloadBatches, this);
+    }
 };
 
-
-#endif //CLARIFICATIONDATASET_H
+#endif // CLARIFICATIONDATASET_H
