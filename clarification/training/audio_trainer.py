@@ -428,7 +428,9 @@ class AudioTrainer:
             if self.s.scaler and allow_mixed_precision:
                 loss_out *= self.m.mixed_precision_config.amp_loss_scalar
 
-            loss_out_weighted = loss_out * loss_config.weight
+            # Get dynamic weight based on current step (supports scheduled weights)
+            current_weight = loss_config.get_weight(self.s.total_batch_count)
+            loss_out_weighted = loss_out * current_weight
 
             if should_log_extra_stuff:
                 self.w.add_scalar(f"{writer_tag_prefix}loss_weighted_{loss_config.name}",

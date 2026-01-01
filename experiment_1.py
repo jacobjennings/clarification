@@ -30,8 +30,8 @@ from clarification.util import *
 # batches_per_iteration = 640
 # batches_per_iteration = 768
 # batches_per_iteration = 896
-batches_per_iteration = 1024
-# batches_per_iteration = 1152
+# batches_per_iteration = 1024
+batches_per_iteration = 1152
 # batches_per_iteration = 1280
 # batches_per_iteration = 1408
 # batches_per_iteration = 1536
