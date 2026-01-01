@@ -391,6 +391,7 @@ class AudioTrainer:
     def loss_calculation(self, golden_classifier_values, golden_reconstructed, prediction,
                          should_log_extra_stuff, writer_step, writer_tag_prefix, allow_mixed_precision):
         loss = None
+        loss_unweighted_total = 0.0  # Track unweighted sum for stable comparison
         weighted_losses = []
         for loss_config in self.m.loss_function_configs:
             if self.m.training_classifier and prediction.size() != golden_classifier_values.size():
@@ -431,12 +432,16 @@ class AudioTrainer:
             # Get dynamic weight based on current step (supports scheduled weights)
             current_weight = loss_config.get_weight(self.s.total_batch_count)
             loss_out_weighted = loss_out * current_weight
+            loss_unweighted_total += loss_out.item()
 
             if should_log_extra_stuff:
                 self.w.add_scalar(f"{writer_tag_prefix}loss_weighted_{loss_config.name}",
                                   loss_out_weighted.item(), writer_step)
                 self.w.add_scalar(f"{writer_tag_prefix}loss_{loss_config.name}",
                                   loss_out.item(), writer_step)
+                # Log current weight so you can see the schedule in action
+                self.w.add_scalar(f"{writer_tag_prefix}weight_{loss_config.name}",
+                                  current_weight, writer_step)
             if loss:
                 loss = loss + loss_out_weighted
             else:
@@ -457,6 +462,8 @@ class AudioTrainer:
             self.w.add_scalar(f"{writer_tag_prefix}total_grad_norm", total_norm, writer_step)
 
             self.w.add_scalar(f"{writer_tag_prefix}loss_total", loss.item(), writer_step)
+            # Unweighted total: stable metric for comparing across different weight schedules
+            self.w.add_scalar(f"{writer_tag_prefix}loss_total_unweighted", loss_unweighted_total, writer_step)
 
         return loss, weighted_losses
 
