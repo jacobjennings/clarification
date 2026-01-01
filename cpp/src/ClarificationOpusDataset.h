@@ -90,35 +90,97 @@ public:
             throw std::runtime_error("Failed to open codec: " + absolute_path_string);
         }
 
+        // Get source sample rate from codec
+        const int src_sample_rate = codec_context->sample_rate;
+        const int dst_sample_rate = sample_rate;  // Target rate from info.csv (24000)
+        const bool needs_resample = (src_sample_rate != dst_sample_rate);
+
+        // Setup resampler if needed
+        SwrContext *swr_ctx = nullptr;
+        if (needs_resample) {
+            swr_ctx = swr_alloc();
+            if (!swr_ctx) {
+                avcodec_free_context(&codec_context);
+                avformat_close_input(&format_context);
+                throw std::runtime_error("Failed to allocate resampler context");
+            }
+
+            AVChannelLayout src_ch_layout = codec_context->ch_layout;
+            AVChannelLayout dst_ch_layout;
+            av_channel_layout_default(&dst_ch_layout, 2);  // Stereo output
+
+            av_opt_set_chlayout(swr_ctx, "in_chlayout", &src_ch_layout, 0);
+            av_opt_set_chlayout(swr_ctx, "out_chlayout", &dst_ch_layout, 0);
+            av_opt_set_int(swr_ctx, "in_sample_rate", src_sample_rate, 0);
+            av_opt_set_int(swr_ctx, "out_sample_rate", dst_sample_rate, 0);
+            av_opt_set_sample_fmt(swr_ctx, "in_sample_fmt", AV_SAMPLE_FMT_FLTP, 0);
+            av_opt_set_sample_fmt(swr_ctx, "out_sample_fmt", AV_SAMPLE_FMT_FLT, 0);  // Interleaved output
+
+            if (swr_init(swr_ctx) < 0) {
+                swr_free(&swr_ctx);
+                avcodec_free_context(&codec_context);
+                avformat_close_input(&format_context);
+                throw std::runtime_error("Failed to init resampler: " + absolute_path_string);
+            }
+        }
+
         // Decode audio
         AVPacket *packet = av_packet_alloc();
         AVFrame *frame = av_frame_alloc();
 
         std::vector<float> audio_channels[2];
-        audio_channels[0].reserve(sample_rate * 30);
-        audio_channels[1].reserve(sample_rate * 30);
+        audio_channels[0].reserve(dst_sample_rate * 30);
+        audio_channels[1].reserve(dst_sample_rate * 30);
+
+        // Lambda to process decoded frame (with optional resampling)
+        auto process_frame = [&]() {
+            if (needs_resample && swr_ctx) {
+                // Calculate output samples needed
+                int64_t out_samples = av_rescale_rnd(
+                    swr_get_delay(swr_ctx, src_sample_rate) + frame->nb_samples,
+                    dst_sample_rate, src_sample_rate, AV_ROUND_UP);
+
+                // Allocate output buffer (interleaved stereo float)
+                std::vector<float> resampled(out_samples * 2);
+                uint8_t *out_ptr = reinterpret_cast<uint8_t*>(resampled.data());
+
+                int converted = swr_convert(swr_ctx, &out_ptr, out_samples,
+                    const_cast<const uint8_t**>(frame->extended_data), frame->nb_samples);
+
+                if (converted > 0) {
+                    // Deinterleave to separate channels
+                    for (int i = 0; i < converted; ++i) {
+                        audio_channels[0].push_back(resampled[i * 2]);
+                        audio_channels[1].push_back(resampled[i * 2 + 1]);
+                    }
+                }
+            } else {
+                // No resampling needed - direct copy
+                const bool is_planar = av_sample_fmt_is_planar(static_cast<AVSampleFormat>(frame->format));
+                const int num_channels = std::min(codec_context->ch_layout.nb_channels, 2);
+                const int num_samples = frame->nb_samples;
+
+                if (is_planar) {
+                    for (int ch = 0; ch < num_channels; ++ch) {
+                        const auto *data = reinterpret_cast<const float*>(frame->extended_data[ch]);
+                        audio_channels[ch].insert(audio_channels[ch].end(), data, data + num_samples);
+                    }
+                } else {
+                    const auto *interleaved = reinterpret_cast<const float*>(frame->extended_data[0]);
+                    for (int i = 0; i < num_samples; ++i) {
+                        for (int ch = 0; ch < num_channels; ++ch) {
+                            audio_channels[ch].push_back(interleaved[i * num_channels + ch]);
+                        }
+                    }
+                }
+            }
+        };
 
         while (av_read_frame(format_context, packet) >= 0) {
             if (packet->stream_index == audio_stream_index) {
                 if (avcodec_send_packet(codec_context, packet) == 0) {
                     while (avcodec_receive_frame(codec_context, frame) == 0) {
-                        const bool is_planar = av_sample_fmt_is_planar(static_cast<AVSampleFormat>(frame->format));
-                        const int num_channels = std::min(codec_context->ch_layout.nb_channels, 2);
-                        const int num_samples = frame->nb_samples;
-
-                        if (is_planar) {
-                            for (int ch = 0; ch < num_channels; ++ch) {
-                                const auto *data = reinterpret_cast<const float*>(frame->extended_data[ch]);
-                                audio_channels[ch].insert(audio_channels[ch].end(), data, data + num_samples);
-                            }
-                        } else {
-                            const auto *interleaved = reinterpret_cast<const float*>(frame->extended_data[0]);
-                            for (int i = 0; i < num_samples; ++i) {
-                                for (int ch = 0; ch < num_channels; ++ch) {
-                                    audio_channels[ch].push_back(interleaved[i * num_channels + ch]);
-                                }
-                            }
-                        }
+                        process_frame();
                     }
                 }
             }
@@ -128,26 +190,29 @@ public:
         // Flush decoder
         avcodec_send_packet(codec_context, nullptr);
         while (avcodec_receive_frame(codec_context, frame) == 0) {
-            const bool is_planar = av_sample_fmt_is_planar(static_cast<AVSampleFormat>(frame->format));
-            const int num_channels = std::min(codec_context->ch_layout.nb_channels, 2);
-            const int num_samples = frame->nb_samples;
+            process_frame();
+        }
 
-            if (is_planar) {
-                for (int ch = 0; ch < num_channels; ++ch) {
-                    const auto *data = reinterpret_cast<const float*>(frame->extended_data[ch]);
-                    audio_channels[ch].insert(audio_channels[ch].end(), data, data + num_samples);
-                }
-            } else {
-                const auto *interleaved = reinterpret_cast<const float*>(frame->extended_data[0]);
-                for (int i = 0; i < num_samples; ++i) {
-                    for (int ch = 0; ch < num_channels; ++ch) {
-                        audio_channels[ch].push_back(interleaved[i * num_channels + ch]);
+        // Flush resampler (get any remaining samples)
+        if (needs_resample && swr_ctx) {
+            int64_t out_samples = swr_get_delay(swr_ctx, dst_sample_rate);
+            if (out_samples > 0) {
+                std::vector<float> resampled(out_samples * 2);
+                uint8_t *out_ptr = reinterpret_cast<uint8_t*>(resampled.data());
+                int converted = swr_convert(swr_ctx, &out_ptr, out_samples, nullptr, 0);
+                if (converted > 0) {
+                    for (int i = 0; i < converted; ++i) {
+                        audio_channels[0].push_back(resampled[i * 2]);
+                        audio_channels[1].push_back(resampled[i * 2 + 1]);
                     }
                 }
             }
         }
 
         // Cleanup FFmpeg
+        if (swr_ctx) {
+            swr_free(&swr_ctx);
+        }
         av_frame_free(&frame);
         av_packet_free(&packet);
         avcodec_free_context(&codec_context);
