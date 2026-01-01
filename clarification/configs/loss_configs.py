@@ -106,14 +106,18 @@ class AudioLossFunctionConfig:
 
 def loss_group_1(dataset_config: DatasetConfig,
                  device: Optional[torch.device] = None) -> Sequence[AudioLossFunctionConfig]:
+    """Combined L1 + SI-SDR + MelSTFT with balanced weights.
+    
+    Note: SI-SDR loss can have much larger magnitude than L1/MelSTFT,
+    so we use a smaller weight to prevent gradient explosion.
+    """
     if not device:
         device = torch.get_default_device()
     return [
-        # Main group
         AudioLossFunctionConfig(
-            name="L1Loss", weight=2.0, fn=nn.L1Loss().to(device), is_unary=False, batch_size=None),
+            name="L1Loss", weight=1.0, fn=nn.L1Loss().to(device), is_unary=False, batch_size=None),
         AudioLossFunctionConfig(
-            name="SISDRLoss", weight=1.5, fn=auraloss.time.SISDRLoss().to(device), is_unary=False, batch_size=None),
+            name="SISDRLoss", weight=0.1, fn=auraloss.time.SISDRLoss().to(device), is_unary=False, batch_size=None),  # Lower weight - SI-SDR has larger magnitude
         AudioLossFunctionConfig(
             name="MelSTFTLoss", weight=0.5,
             fn=auraloss.freq.MelSTFTLoss(sample_rate=dataset_config.sample_rate, n_mels=128, device=device).to(device),
@@ -123,13 +127,14 @@ def loss_group_1(dataset_config: DatasetConfig,
 
 def loss_group_2(dataset_config: DatasetConfig,
                  device: Optional[torch.device] = None) -> Sequence[AudioLossFunctionConfig]:
+    """SI-SDR + MelSTFT with balanced weights."""
     if not device:
         device = torch.get_default_device()
     return [
         AudioLossFunctionConfig(
-            name="SISDRLoss", weight=0.5, fn=auraloss.time.SISDRLoss().to(device), is_unary=False, batch_size=None),
+            name="SISDRLoss", weight=0.1, fn=auraloss.time.SISDRLoss().to(device), is_unary=False, batch_size=None),  # Lower weight
         AudioLossFunctionConfig(
-            name="MelSTFTLoss", weight=0.5,
+            name="MelSTFTLoss", weight=1.0,
             fn=auraloss.freq.MelSTFTLoss(sample_rate=dataset_config.sample_rate, n_mels=128, device=device).to(device),
             is_unary=False, batch_size=None),
     ]

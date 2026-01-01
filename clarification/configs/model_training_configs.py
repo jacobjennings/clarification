@@ -105,7 +105,7 @@ class PresetTrainingConfig1(ModelTrainingConfig):
         if not self.scheduler:
             self.scheduler = clarification.schedulers.InterpolatingLR(
                 optimizer=self.optimizer,
-                milestones=[(0, 0.1), (500000, 0.005)])
+                milestones=[(0, 0.2), (500000, 0.001)])
 
         if not self.dataset_config:
             self.dataset_config = PresetDatasetConfig1(batches_per_iteration=self.batches_per_iteration,
