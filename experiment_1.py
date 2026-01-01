@@ -40,6 +40,9 @@ batches_per_iteration = 1152
 # batches_per_iteration = 1920
 # batches_per_iteration = 2048
 
+# Set to True to start fresh (no weight loading, new TensorBoard directory)
+FRESH_START = True
+
 def start_tensorboard(logdir):
     subprocess.run(["venv/bin/tensorboard", "--logdir", logdir, "--bind_all"])
 
@@ -211,6 +214,7 @@ class Experiment1:
         train_multiple_config = c.training.train_multiple.TrainMultipleConfig(
             trainer_configs=configs,
             should_perform_memory_test=False,
+            auto_resume=not FRESH_START,  # Set FRESH_START=True at top of file to start from scratch
         )
         train_multiple = c.training.train_multiple.TrainMultiple(
             config=train_multiple_config
