@@ -137,7 +137,7 @@ def loss_group_2(dataset_config: DatasetConfig,
 
 def loss_group_scheduled(dataset_config: DatasetConfig,
                          device: Optional[torch.device] = None,
-                         transition_steps: int = 50000) -> Sequence[AudioLossFunctionConfig]:
+                         transition_steps: int = 500000) -> Sequence[AudioLossFunctionConfig]:
     """
     Scheduled loss group: L1 dominates early training, then fades out
     while perceptual losses (SI-SDR, Mel-STFT) take over.

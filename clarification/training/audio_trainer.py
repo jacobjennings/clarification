@@ -1,6 +1,7 @@
 import os
 import time
 import logging
+import glob
 
 logger = logging.getLogger(__name__)
 import torch.utils.checkpoint
@@ -143,12 +144,20 @@ class AudioTrainer:
                 pprint.pprint(self.s, width=2)
 
             if self.s.batches_since_last_save >= self.l.model_weights_save_every_batches:
-                # Better to overwrite to avoid stacking up disk space.
+                # Save weights with step count in filename for resume capability
                 Path(self.l.model_weights_dir).mkdir(parents=True, exist_ok=True)
-                model_save_path = self.l.model_weights_dir + f"/weights-{self.c.training_date_str}-{self.m.name}"
+                model_save_path = self.l.model_weights_dir + f"/weights-{self.s.batches_trained}-{self.m.name}"
                 self.w.add_text(f"model_save_path_{self.m.name}", model_save_path, self.s.batches_trained)
-                if os.path.exists(model_save_path):
-                    os.remove(model_save_path)
+                
+                # Remove old weights files to avoid disk space buildup (keep only latest)
+                old_weights = glob.glob(self.l.model_weights_dir + f"/weights-*-{self.m.name}")
+                for old_path in old_weights:
+                    if old_path != model_save_path:
+                        try:
+                            os.remove(old_path)
+                        except:
+                            pass
+                
                 torch.save(self.m.model.state_dict(), model_save_path)
                 self.s.batches_since_last_save = 0
 
@@ -430,7 +439,7 @@ class AudioTrainer:
                 loss_out *= self.m.mixed_precision_config.amp_loss_scalar
 
             # Get dynamic weight based on current step (supports scheduled weights)
-            current_weight = loss_config.get_weight(self.s.total_batch_count)
+            current_weight = loss_config.get_weight(self.s.batches_trained)
             loss_out_weighted = loss_out * current_weight
             loss_unweighted_total += loss_out.item()
 

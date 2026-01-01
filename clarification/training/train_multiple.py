@@ -3,6 +3,7 @@
 import logging
 import glob
 import os
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,32 @@ class TrainMultiple:
                         # Load on CPU first, then move to device later in train_rotation
                         model_config.model.load_state_dict(torch.load(weights_path, map_location="cpu", weights_only=True))
                         print(f"INFO: Loaded weights for {model_config.name} from {weights_path}")
+                        
+                        # Extract run directory and step count from weights path
+                        # Path format: .../runs/{run_name}/weights/weights-{step}-{model_name}
+                        run_dir = self.extract_run_dir(weights_path)
+                        step_count = self.extract_step_count(weights_path)
+                        
+                        if run_dir:
+                            # Recreate SummaryWriter to continue in same TensorBoard directory
+                            old_writer = trainer_config.log_behavior_config.writer
+                            trainer_config.log_behavior_config.writer = SummaryWriter(log_dir=run_dir)
+                            trainer_config.log_behavior_config.model_weights_dir = models_dir(a_runs_dir=run_dir)
+                            trainer_config.log_behavior_config.profiling_data_output_dir = profiling_data_dir(a_runs_dir=run_dir)
+                            print(f"INFO: Continuing TensorBoard logging in {run_dir}")
+                            
+                            # Close old writer if it was created
+                            if old_writer:
+                                try:
+                                    old_writer.close()
+                                except:
+                                    pass
+                        
+                        if step_count is not None:
+                            # Restore step count so logging continues from correct position
+                            trainer_config.state.batches_trained = step_count
+                            print(f"INFO: Resuming from step {step_count}")
+                            
                     except Exception as e:
                         print(f"WARNING: Could not load weights for {model_config.name} from {weights_path}: {e}")
                 elif self.c.resume_from_run_dir:
@@ -129,3 +156,30 @@ class TrainMultiple:
         # Sort by modification time to get the most recent
         files.sort(key=os.path.getmtime, reverse=True)
         return files[0]
+
+    @staticmethod
+    def extract_run_dir(weights_path: str) -> Optional[str]:
+        """Extract the run directory from a weights path.
+        
+        Path format: .../runs/{run_name}/weights/weights-{step}-{model_name}
+        Returns: .../runs/{run_name}
+        """
+        # Go up two levels from weights file: weights_file -> weights/ -> run_dir/
+        weights_dir = os.path.dirname(weights_path)
+        if os.path.basename(weights_dir) == "weights":
+            return os.path.dirname(weights_dir)
+        return None
+
+    @staticmethod
+    def extract_step_count(weights_path: str) -> Optional[int]:
+        """Extract the step count from a weights filename.
+        
+        Filename format: weights-{step}-{model_name}
+        Returns: step count as int, or None if not found
+        """
+        filename = os.path.basename(weights_path)
+        # Match: weights-123456-modelname
+        match = re.match(r'weights-(\d+)-', filename)
+        if match:
+            return int(match.group(1))
+        return None
