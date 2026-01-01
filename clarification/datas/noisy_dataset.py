@@ -51,20 +51,30 @@ def load_lz4_file(path: str, sample_size: int) -> torch.Tensor:
     return audio_tensor.view(num_chunks, sample_size, 2).permute(0, 2, 1).contiguous()
 
 
-def load_opus_file(path: str, sample_size: int) -> torch.Tensor:
+def load_opus_file(path: str, sample_size: int, target_sample_rate: int = 24000) -> torch.Tensor:
     """
-    Load Opus encoded audio file.
+    Load Opus encoded audio file, resampling to target rate if needed.
+    
+    Args:
+        path: Path to opus file
+        sample_size: Number of samples per chunk
+        target_sample_rate: Target sample rate (default 24000 Hz)
     
     Returns tensor of shape [num_chunks, 2, sample_size] in fp16.
     """
     import torchaudio
     
     # torchaudio loads as [channels, samples]
-    audio, sample_rate = torchaudio.load(path, backend="ffmpeg")
+    audio, source_rate = torchaudio.load(path, backend="ffmpeg")
     
     # Should be stereo [2, samples]
     if audio.shape[0] != 2:
         raise ValueError(f"Expected stereo audio, got {audio.shape[0]} channels")
+    
+    # Resample if needed (Opus typically encodes at 48kHz)
+    if source_rate != target_sample_rate:
+        resampler = torchaudio.transforms.Resample(source_rate, target_sample_rate)
+        audio = resampler(audio)
     
     # Reshape to [num_chunks, 2, sample_size]
     num_samples = audio.shape[1]
@@ -141,7 +151,7 @@ class NoisyCommonsDataset(Dataset):
         if self.use_lz4:
             return load_lz4_file(absolute_path, self.sample_size)
         else:
-            return load_opus_file(absolute_path, self.sample_size)
+            return load_opus_file(absolute_path, self.sample_size, self.sample_rate)
 
 
 class PythonDataLoader:
