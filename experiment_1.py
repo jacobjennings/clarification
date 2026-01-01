@@ -61,11 +61,12 @@ class Experiment1:
             send_audio_clip_every_batches=100000
         )
 
-        # Use scheduled loss: L1 dominates early, perceptual takes over later
+        # Use scheduled loss: Three-phase training
         if use_scheduled_loss:
-            loss_configs = c.configs.loss_group_scheduled(
-                self.dataset_config, 
-                transition_steps=100000
+            loss_configs = c.configs.loss_group_three_phase(
+                self.dataset_config,
+                phase1_end=500000,
+                phase2_end=1000000
             )
         else:
             loss_configs = c.configs.loss_group_2(self.dataset_config)
@@ -96,11 +97,15 @@ class Experiment1:
             send_audio_clip_every_batches=100000
         )
 
-        # Use scheduled loss: L1 dominates early, perceptual takes over later
+        # Use scheduled loss: Three-phase training
+        # Phase 1 (0-500k): L1 only - establishes basic structure
+        # Phase 2 (500k-1M): Mix of SI-SDR and Mel-STFT - perceptual refinement
+        # Phase 3 (1M+): Mel-STFT only - final quality polish
         if use_scheduled_loss:
-            loss_configs = c.configs.loss_group_scheduled(
-                self.dataset_config, 
-                transition_steps=100000  # ~100k steps for full transition
+            loss_configs = c.configs.loss_group_three_phase(
+                self.dataset_config,
+                phase1_end=500000,
+                phase2_end=1000000
             )
         else:
             loss_configs = c.configs.loss_group_2(self.dataset_config)

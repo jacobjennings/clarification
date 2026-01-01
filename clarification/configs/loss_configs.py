@@ -202,6 +202,97 @@ def loss_group_scheduled(dataset_config: DatasetConfig,
     ]
 
 
+def loss_group_three_phase(dataset_config: DatasetConfig,
+                           device: Optional[torch.device] = None,
+                           phase1_end: int = 500000,
+                           phase2_end: int = 1000000) -> Sequence[AudioLossFunctionConfig]:
+    """
+    Three-phase loss schedule:
+    
+    Phase 1 (0 to phase1_end): L1 dominates
+        - L1Loss: 1.0
+        - SISDRLoss: 0.0
+        - MelSTFTLoss: 0.0
+    
+    Phase 2 (phase1_end to phase2_end): Mix of SI-SDR and Mel-STFT
+        - L1Loss: decays 1.0 → 0.0
+        - SISDRLoss: ramps 0.0 → 0.5 → 0.0 (peaks in middle, then fades)
+        - MelSTFTLoss: ramps 0.0 → 1.0
+    
+    Phase 3 (after phase2_end): Only MelSTFTLoss
+        - L1Loss: 0.0
+        - SISDRLoss: 0.0
+        - MelSTFTLoss: 1.0
+    """
+    if not device:
+        device = torch.get_default_device()
+    
+    def l1_schedule(step: int) -> float:
+        """L1: 1.0 during phase 1, decays to 0 during phase 2, stays 0 in phase 3"""
+        if step <= phase1_end:
+            return 1.0
+        elif step <= phase2_end:
+            # Linear decay from 1.0 to 0.0
+            progress = (step - phase1_end) / (phase2_end - phase1_end)
+            return 1.0 - progress
+        else:
+            return 0.0
+    
+    def sisdr_schedule(step: int) -> float:
+        """SI-SDR: 0 in phase 1, ramps up then down in phase 2, 0 in phase 3"""
+        if step <= phase1_end:
+            return 0.0
+        elif step <= phase2_end:
+            # Ramp up to peak at middle of phase 2, then decay
+            progress = (step - phase1_end) / (phase2_end - phase1_end)
+            # Triangle: peaks at 0.5 progress
+            if progress <= 0.5:
+                return progress * 2  # 0 → 1
+            else:
+                return (1 - progress) * 2  # 1 → 0
+        else:
+            return 0.0
+    
+    def melstft_schedule(step: int) -> float:
+        """MelSTFT: 0 in phase 1, ramps up in phase 2, 1.0 in phase 3"""
+        if step <= phase1_end:
+            return 0.0
+        elif step <= phase2_end:
+            # Linear ramp from 0 to 1
+            progress = (step - phase1_end) / (phase2_end - phase1_end)
+            return progress
+        else:
+            return 1.0
+    
+    return [
+        AudioLossFunctionConfig(
+            name="L1Loss",
+            weight=1.0,
+            weight_fn=l1_schedule,
+            fn=nn.L1Loss().to(device),
+            is_unary=False,
+        ),
+        AudioLossFunctionConfig(
+            name="SISDRLoss",
+            weight=1.0,
+            weight_fn=sisdr_schedule,
+            fn=auraloss.time.SISDRLoss().to(device),
+            is_unary=False,
+        ),
+        AudioLossFunctionConfig(
+            name="MelSTFTLoss",
+            weight=1.0,
+            weight_fn=melstft_schedule,
+            fn=auraloss.freq.MelSTFTLoss(
+                sample_rate=dataset_config.sample_rate,
+                n_mels=128,
+                device=device
+            ).to(device),
+            is_unary=False,
+        ),
+    ]
+
+
 def loss_group_l1_to_perceptual(dataset_config: DatasetConfig,
                                 device: Optional[torch.device] = None,
                                 l1_decay_start: int = 10000,
