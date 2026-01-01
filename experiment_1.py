@@ -51,12 +51,21 @@ class Experiment1:
         self.training_date_str = ""
 
 
-    def dense_config(self, name, layer_sizes):
+    def dense_config(self, name, layer_sizes, use_scheduled_loss=True):
         log_config = c.configs.PresetLogBehaviorConfig1(
             log_info_every_batches=50000,
             runs_subdir_name=f"{self.training_date_str}-{name}",
             send_audio_clip_every_batches=100000
         )
+
+        # Use scheduled loss: L1 dominates early, perceptual takes over later
+        if use_scheduled_loss:
+            loss_configs = c.configs.loss_group_scheduled(
+                self.dataset_config, 
+                transition_steps=100000
+            )
+        else:
+            loss_configs = c.configs.loss_group_2(self.dataset_config)
 
         model_config = c.configs.DenseTrainingConfig(
             name=name,
@@ -67,6 +76,7 @@ class Experiment1:
             batches_per_rotation=50000,
             training_date_str=self.training_date_str,
             validation_config=self.validation_config,
+            loss_function_configs=loss_configs,
         )
 
         trainer_config = c.configs.AudioTrainerConfig(
@@ -76,12 +86,21 @@ class Experiment1:
         )
         return trainer_config
 
-    def simple_config(self, name, layer_sizes):
+    def simple_config(self, name, layer_sizes, use_scheduled_loss=True):
         log_config = c.configs.PresetLogBehaviorConfig1(
             log_info_every_batches=50000,
             runs_subdir_name=f"{self.training_date_str}-{name}",
             send_audio_clip_every_batches=100000
         )
+
+        # Use scheduled loss: L1 dominates early, perceptual takes over later
+        if use_scheduled_loss:
+            loss_configs = c.configs.loss_group_scheduled(
+                self.dataset_config, 
+                transition_steps=100000  # ~100k steps for full transition
+            )
+        else:
+            loss_configs = c.configs.loss_group_2(self.dataset_config)
 
         model_config = c.configs.SimpleTrainingConfig(
             name=name,
@@ -92,6 +111,7 @@ class Experiment1:
             batches_per_rotation=50000,
             training_date_str=self.training_date_str,
             validation_config=self.validation_config,
+            loss_function_configs=loss_configs,
         )
 
         trainer_config = c.configs.AudioTrainerConfig(
