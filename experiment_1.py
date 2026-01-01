@@ -31,9 +31,9 @@ from clarification.util import *
 # batches_per_iteration = 768
 # batches_per_iteration = 896
 # batches_per_iteration = 1024
-batches_per_iteration = 1152
+# batches_per_iteration = 1152
 # batches_per_iteration = 1280
-# batches_per_iteration = 1408
+batches_per_iteration = 1408
 # batches_per_iteration = 1536
 # batches_per_iteration = 1664
 # batches_per_iteration = 1792
@@ -220,9 +220,17 @@ class Experiment1:
             # self.simple_config("simple100k-fp16-1", [80, 80, 80, 80, 80]),
             
             # Loss function comparison experiments (same architecture, different losses)
-            self.simple_config("simple100k-L1", [80, 80, 80, 80, 80], loss_fn=c.configs.loss_l1_only),
-            self.simple_config("simple100k-SISDR", [80, 80, 80, 80, 80], loss_fn=c.configs.loss_sisdr_only),
-            self.simple_config("simple100k-MelSTFT", [80, 80, 80, 80, 80], loss_fn=c.configs.loss_melstft_only),
+            # Individual loss functions
+            self.simple_config("simple100k-2-L1", [64, 64, 64, 64, 64], loss_fn=c.configs.loss_l1_only),
+            self.simple_config("simple100k-2-SISDR", [64, 64, 64, 64, 64], loss_fn=c.configs.loss_sisdr_only),
+            self.simple_config("simple100k-2-MelSTFT", [64, 64, 64, 64, 64], loss_fn=c.configs.loss_melstft_only),
+            
+            # Combined loss groups (static weights)
+            self.simple_config("simple100k-2-group1", [64, 64, 64, 64, 64], loss_fn=c.configs.loss_group_1),  # L1+SISDR+MelSTFT
+            self.simple_config("simple100k-2-group2", [64, 64, 64, 64, 64], loss_fn=c.configs.loss_group_2),  # SISDR+MelSTFT
+            
+            # Scheduled loss groups (dynamic weights)
+            self.simple_config("simple100k-2-scheduled", [64, 64, 64, 64, 64]),  # uses default three-phase
         ]
 
         train_multiple_config = c.training.train_multiple.TrainMultipleConfig(
