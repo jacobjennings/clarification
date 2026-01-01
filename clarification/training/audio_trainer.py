@@ -347,6 +347,9 @@ class AudioTrainer:
 
                 if scheduler:
                     scheduler.step()
+                    # Log learning rate to TensorBoard
+                    current_lr = scheduler.get_last_lr()[0]
+                    self.w.add_scalar(f"learning_rate", current_lr, self.s.batches_trained)
 
             model.eval()
 

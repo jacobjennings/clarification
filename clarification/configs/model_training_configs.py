@@ -100,12 +100,12 @@ class PresetTrainingConfig1(ModelTrainingConfig):
             self.loss_function_configs = loss_group_2(self.dataset_config, self.device)
 
         if not self.optimizer:
-            self.optimizer = torch.optim.SGD(params=self.training_model().parameters(), lr=0.01)
+            self.optimizer = torch.optim.SGD(params=self.training_model().parameters(), lr=0.1)
 
         if not self.scheduler:
             self.scheduler = clarification.schedulers.InterpolatingLR(
                 optimizer=self.optimizer,
-                milestones=[(0, 0.01), (1000000, 0.0001)])
+                milestones=[(0, 0.1), (500000, 0.005)])
 
         if not self.dataset_config:
             self.dataset_config = PresetDatasetConfig1(batches_per_iteration=self.batches_per_iteration,
