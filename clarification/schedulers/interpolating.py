@@ -18,11 +18,11 @@ class InterpolatingLR(LRScheduler):
             each update. Default: ``False``.
     """
 
-    def __init__(self, optimizer, milestones, last_epoch=-1, verbose=False):
+    def __init__(self, optimizer, milestones, last_epoch=-1):
         self.milestones = milestones
         self.milestone_steps, self.milestone_lrs = zip(*milestones)  # Unzip for easier access
         
-        super().__init__(optimizer, last_epoch, verbose)
+        super().__init__(optimizer, last_epoch)
 
     def get_lr(self):
         """

@@ -1,0 +1,13 @@
+[Unit]
+Description=Switch Primary GPU based on Kernel Parameter
+Before=display-manager.service
+After=systemd-modules-load.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/gpu-switch.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+

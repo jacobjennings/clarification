@@ -41,7 +41,7 @@ def profiling_data_dir(a_runs_dir: str):
     return f"{a_runs_dir}/profiling_data"
 
 def dataset_dir():
-    return f"{workspace_dir()}/mounted_image/noisy-commonvoice-24k-300ms-5ms-opus"
+    return f"{workspace_dir()}/noisy-commonvoice-24k-300ms-5ms-opus"
 
 def run_dir(label: str):
     return f"{runs_dir()}/{label}"

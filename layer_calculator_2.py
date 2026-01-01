@@ -7,7 +7,7 @@ import torch
 from clarification.models.clarification_dense import input_size_for_layer
 
 sample_rate = 24000
-dtype = torch.float32
+dtype = torch.float16
 
 sample_batch_ms = 300
 samples_per_batch = int((sample_batch_ms / 1000) * sample_rate)
@@ -101,7 +101,7 @@ def calculate_layers():
     # for i in range(1500000, 5000000, 500000):
     #     target_sizes.append(i)
 
-    target_sizes = [70000]
+    target_sizes = [50000]
 
     layers_candidates = []
     for layer_count in range(3, 7, 1):

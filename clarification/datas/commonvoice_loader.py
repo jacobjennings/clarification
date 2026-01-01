@@ -22,7 +22,9 @@ class CommonVoiceLoader:
                  batches_per_iteration,
                  should_pin_memory,
                  num_workers,
-                 device):
+                 device,
+                 use_cpp_loader=False,
+                 use_lz4=True):
         self.base_dir = base_dir
         self.dataset_batch_size = dataset_batch_size
         self.loader_batch_size = batches_per_iteration // dataset_batch_size
@@ -34,9 +36,43 @@ class CommonVoiceLoader:
 
         self.train_loader = None
         self.test_loader = None
+        self.use_cpp_loader = use_cpp_loader
+        self.use_lz4 = use_lz4
 
     def create_loaders(self):
         """Creates loaders"""
+        if self.use_cpp_loader:
+            from . import cpp_loader
+            
+            # The python loader setup results in a tensor of shape:
+            # [loader_batch_size, dataset_batch_size, 2, sample_size]
+            # The C++ loader produces [batch_size, 2, sample_size].
+            # We want to match the total number of samples per step.
+            
+            total_batch_size = self.loader_batch_size * self.dataset_batch_size
+            
+            self.train_loader = cpp_loader.CppDataLoader(
+                device=torch.device(self.device),
+                base_dir=self.base_dir + "/train",
+                csv_filename="train.csv",
+                batch_size=total_batch_size,
+                num_preload_batches=16,
+                num_threads=self.num_workers,
+                use_lz4=self.use_lz4
+            )
+            
+            self.test_loader = cpp_loader.CppDataLoader(
+                device=torch.device(self.device),
+                base_dir=self.base_dir + "/test",
+                csv_filename="test.csv",
+                batch_size=total_batch_size,
+                num_preload_batches=4,
+                num_threads=1,
+                use_lz4=self.use_lz4
+            )
+            
+            return
+
         self.train_dataset = noisy_dataset.NoisyCommonsDataset(
             batch_size=self.dataset_batch_size, 
             device=self.device, 

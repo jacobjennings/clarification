@@ -14,6 +14,9 @@ find_package(OpenMP REQUIRED)
 find_package(ZLIB REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(LIBOPUS REQUIRED opus)
+pkg_check_modules(LIBLZ4 REQUIRED liblz4)  # Add this line to find liblz4
+
+
 
 #get_cmake_property(_variableNames VARIABLES)
 #list (SORT _variableNames)
@@ -40,9 +43,14 @@ add_executable(clarification-dataloader
         mains/main.cpp
         src/ClarificationDataset.cpp
         src/ClarificationDataset.h
+        src/ClarificationLz4Dataset.cpp
+        src/ClarificationLz4Dataset.h
+        src/ClarificationOpusDataset.cpp
+        src/ClarificationOpusDataset.h
 )
 target_include_directories(clarification-dataloader PRIVATE
         ${TORCH_INCLUDE_DIRS}
+        ${LIBLZ4_INCLUDE_DIRS}
 )
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Download and build FFmpeg ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -66,11 +74,11 @@ set(FFMPEG_INSTALL_DIR ${CMAKE_BINARY_DIR}/ffmpeg_install)
 file(MAKE_DIRECTORY ${FFMPEG_BUILD_DIR})
 
 # Configure and build FFmpeg using its configure script
-execute_process(
+    execute_process(
         COMMAND
         ./configure --prefix=${FFMPEG_INSTALL_DIR}
-        --enable-static
-        --disable-shared
+        --disable-static
+        --enable-shared
         --disable-vaapi
         --enable-libopus
         --extra-cflags="-I/usr/local/include"
@@ -108,11 +116,12 @@ target_include_directories(clarification-dataloader PRIVATE
 set(FFMPEG_LIBRARIES
         ${LIBOPUS_LIBRARIES}
         ZLIB::ZLIB
-        ${FFMPEG_INSTALL_DIR}/lib/libavcodec.a
-        ${FFMPEG_INSTALL_DIR}/lib/libavformat.a
-        ${FFMPEG_INSTALL_DIR}/lib/libavutil.a
-        ${FFMPEG_INSTALL_DIR}/lib/libswresample.a
-        ${FFMPEG_INSTALL_DIR}/lib/libswscale.a
+        -L${FFMPEG_INSTALL_DIR}/lib
+        -lavcodec
+        -lavformat
+        -lavutil
+        -lswresample
+        -lswscale
 )
 set(FFMPEG_INCLUDE_DIRS ${FFMPEG_INSTALL_DIR}/include)
 
@@ -132,6 +141,7 @@ target_link_libraries(clarification-dataloader
         ${TORCH_LIBRARIES}
         ${TORCHAUDIO_LIBRARY}
         ${X11_LIBRARIES}
+        ${LIBLZ4_LIBRARIES}
         $<$<BOOL:${OpenMP_FOUND}>:OpenMP::OpenMP_CXX> # Conditionally link OpenMP
 )
 
@@ -145,6 +155,7 @@ target_include_directories(clarification-tests PRIVATE
         ${googletest_SOURCE_DIR}/googletest/include
         ${torchaudio_SOURCE_DIR}
         ${FFMPEG_INCLUDE_DIRS}
+        ${LIBLZ4_INCLUDE_DIRS}
 )
 
 target_link_libraries(clarification-tests PRIVATE
@@ -153,6 +164,7 @@ target_link_libraries(clarification-tests PRIVATE
         ${TORCH_LIBRARIES}
         ${TORCHAUDIO_LIBRARY}
         ${X11_LIBRARIES}
+        ${LIBLZ4_LIBRARIES}
         gtest
         gtest_main
         $<$<BOOL:${OpenMP_FOUND}>:OpenMP::OpenMP_CXX> # Conditionally link OpenMP

@@ -28,6 +28,9 @@ class AudioTrainer:
         self.d = config.model_training_config.dataset_config
         self.l = config.log_behavior_config
         self.w = config.log_behavior_config.writer
+        
+        # Get overlap_samples from the data loader (read from dataset's info.csv)
+        self.overlap_samples = self.m.dataset_loader.overlap_size
 
         if self.m.mixed_precision_config.use_scaler_dtype:
             self.s.scaler = GradScaler()
@@ -396,27 +399,31 @@ class AudioTrainer:
 
             goldens = golden_classifier_values if self.m.training_classifier else golden_reconstructed
 
+            # Cast to float for loss calculation as many loss functions (like MelSTFTLoss) don't support Half
+            prediction_loss = prediction.float()
+            goldens_loss = goldens.float() if goldens is not None else None
+
             if loss_config.batch_size:
-                prediction = better_split_discard_remainder(prediction, loss_config.batch_size)
-                goldens = better_split_discard_remainder(goldens, loss_config.batch_size)
+                prediction_loss = better_split_discard_remainder(prediction_loss, loss_config.batch_size)
+                goldens_loss = better_split_discard_remainder(goldens_loss, loss_config.batch_size)
 
             if loss_config.is_unary:
 
                 # TODO             next_input = next_input.view(-1, self.d.samples_per_batch * self.d.dataset_batch_size)
                 if self.s.scaler and allow_mixed_precision:
                     with autocast("cuda", dtype=self.m.mixed_precision_config.use_scaler_dtype):
-                        loss_out = loss_config.fn(prediction)
+                        loss_out = loss_config.fn(prediction_loss)
                     loss_out = self.s.scaler.scale(loss_out)
                 else:
-                    loss_out = loss_config.fn(prediction)
+                    loss_out = loss_config.fn(prediction_loss)
                 loss_out = torch.mean(loss_out)
             else:
                 if self.s.scaler and allow_mixed_precision:
                     with autocast("cuda", dtype=self.m.mixed_precision_config.use_scaler_dtype):
-                        loss_out = loss_config.fn(prediction, goldens)
+                        loss_out = loss_config.fn(prediction_loss, goldens_loss)
                     loss_out = self.s.scaler.scale(loss_out)
                 else:
-                    loss_out = loss_config.fn(prediction, goldens)
+                    loss_out = loss_config.fn(prediction_loss, goldens_loss)
 
             if self.s.scaler and allow_mixed_precision:
                 loss_out *= self.m.mixed_precision_config.amp_loss_scalar
@@ -469,6 +476,7 @@ class AudioTrainer:
             next_input, golden_classifier_values = next(loader_iter, None)
             if next_input is None:
                 self.reset_epoch()
+                loader_iter = self.s.data_loader_iter
                 next_input, golden_classifier_values = next(loader_iter, None)
 
             golden_classifier_values = golden_classifier_values.mean(dim=1)
@@ -477,6 +485,7 @@ class AudioTrainer:
             next_input = next(loader_iter, None)
             if next_input is None:
                 self.reset_epoch()
+                loader_iter = self.s.data_loader_iter
                 next_input = next(loader_iter, None)
 
             next_input = next_input.view(-1, 2, self.d.samples_per_batch)
@@ -535,19 +544,19 @@ class AudioTrainer:
 
     def reconstruct_overlapping_samples_nofade(self, samples: torch.Tensor):
         num_batches = samples.size()[0]
-        non_overlapping_size = self.d.samples_per_batch - self.d.overlap_samples * 2
+        non_overlapping_size = self.d.samples_per_batch - self.overlap_samples * 2
 
-        total_length = (num_batches * (self.d.samples_per_batch - self.d.overlap_samples)) - self.d.overlap_samples * 2
+        total_length = (num_batches * (self.d.samples_per_batch - self.overlap_samples)) - self.overlap_samples * 2
         output = torch.zeros(total_length, dtype=samples.dtype, device=samples.device)
 
-        output[:non_overlapping_size + self.d.overlap_samples] += samples[0][self.d.overlap_samples:]
+        output[:non_overlapping_size + self.overlap_samples] += samples[0][self.overlap_samples:]
 
         for idx, batch in enumerate(samples[1:-1]):
             idx = idx + 1
-            start = (idx * non_overlapping_size) + ((idx - 1) * self.d.overlap_samples)
-            end = start + non_overlapping_size + self.d.overlap_samples * 2
+            start = (idx * non_overlapping_size) + ((idx - 1) * self.overlap_samples)
+            end = start + non_overlapping_size + self.overlap_samples * 2
             output[start:end] = batch
 
-        output[-(non_overlapping_size + self.d.overlap_samples):] += samples[-1][:-self.d.overlap_samples]
+        output[-(non_overlapping_size + self.overlap_samples):] += samples[-1][:-self.overlap_samples]
 
         return output.unsqueeze(dim=0).unsqueeze(dim=0)

@@ -50,7 +50,7 @@ class ModelTrainingConfig:
     dataset_config: DatasetConfig
     dataset_loader: DataLoader
     batches_per_rotation: int
-    should_use_dataparallel: bool = True
+    should_use_dataparallel: bool = False
     model_wrapper: Optional[nn.Module] = None
     step_every_iterations: int = 1
     validation_config: Optional[ValidationConfig] = None
@@ -97,7 +97,7 @@ class PresetTrainingConfig1(ModelTrainingConfig):
             self.dtype = torch.get_default_dtype()
 
         if not self.loss_function_configs:
-            self.loss_function_configs = loss_group_1(self.dataset_config, self.device)
+            self.loss_function_configs = loss_group_2(self.dataset_config, self.device)
 
         if not self.optimizer:
             self.optimizer = torch.optim.SGD(params=self.training_model().parameters(), lr=0.01)

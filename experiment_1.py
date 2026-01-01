@@ -18,9 +18,9 @@ from clarification.util import *
 # batches_per_iteration = 160
 # batches_per_iteration = 192
 # batches_per_iteration = 224
-batches_per_iteration = 256
+# batches_per_iteration = 256
 # batches_per_iteration = 288
-# batches_per_iteration = 320
+batches_per_iteration = 320
 # batches_per_iteration = 352
 # batches_per_iteration = 384
 # batches_per_iteration = 416
@@ -133,9 +133,18 @@ class Experiment1:
             dataset_batch_size=32,
         )
 
+        # To switch between C++ and Python loaders:
+        # use_cpp_loader = True: Uses C++ loader with LZ4 dataset
+        # use_cpp_loader = False: Uses Python loader with Opus/WAV dataset
+        use_cpp_loader = True
+        
+        dataset_path = None # Use default from dataset_dir()
+
         dataset_loader = c.configs.PresetCommonVoiceLoader(
             dataset_batch_size=dataset_config.dataset_batch_size,
             batches_per_iteration=dataset_config.batches_per_iteration,
+            use_cpp_loader=use_cpp_loader,
+            dataset_path=dataset_path
         )
         dataset_loader.create_loaders()
 
@@ -149,6 +158,7 @@ class Experiment1:
 
     def train(self):
         self.training_date_str = datetime.datetime.now().strftime('%Y-%m-%d__%H-%M-%S')
+        torch.set_default_dtype(torch.float16)
 
         configs = [
             # resnet_config(training_date_str, "resnet450k-1", resnet_dataset_config, resnet_dataset_loader, resnet_validation_config, 152, 11, 128),
@@ -170,8 +180,12 @@ class Experiment1:
             # self.dense_config("dense70k-401", [40, 24, 16, 56, 32]),
             # self.dense_config("dense70k-523", [64, 48, 16, 24, 32]),
 
+
             # self.simple_config("simple1M-1", [72, 120, 168, 216, 168, 120, 72]),
-            self.simple_config("simple2M-1", [160, 192, 224, 256, 224, 192, 160]),
+            # self.simple_config("simple2M-1", [160, 192, 224, 256, 224, 192, 160]),
+
+
+            self.simple_config("simple100k-fp16-1", [80, 80, 80, 80, 80]),
         ]
 
         train_multiple_config = c.training.train_multiple.TrainMultipleConfig(

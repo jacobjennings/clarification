@@ -1,72 +1,29 @@
 import argparse
-import copy
 import os
 import logging
-import secrets
-import numpy
-import copy
 import threading
-import concurrent.futures
-import multiprocessing
 import itertools
 import csv
 import sys
 csv.field_size_limit(sys.maxsize)
 import logging
-import ffmpeg
+import lz4.block
+import pathlib
+import time
+from multiprocessing import Pool, Value
+import torch
+from torch.utils.data import DataLoader
+import torchaudio
 
 logger = logging.getLogger(__name__)
-import pathlib
-
-from ipywidgets import IntProgress
-from IPython.display import display
-from IPython.display import Audio
-import time
-
-from more_itertools import chunked
-from multiprocessing import Pool, TimeoutError, Value
-
-# PyTorch model and training necessities
-import torch
-import torch.nn as nn
-import torch.nn.functional as nnF
-import torch.optim as optim
-from torch.utils.data import DataLoader
-
-# Audio
-import torchaudio
-import torchaudio.transforms as TAT
-
-from torio.io import CodecConfig
-
-# Image datasets and image manipulation
-import torchvision
-import torchvision.transforms as transforms
-
-# Image display
-import matplotlib.pyplot as plt
-import numpy as np
-
-# PyTorch TensorBoard support
-from torch.utils.tensorboard import SummaryWriter
 
 base_dataset_directory = '/workspace/cv-20/cv-corpus-20.0-2024-12-06'
 
-# Uncomment these. Safety measure to avoid accidental use.
-# train_out_dataset_directory = '/workspace/noisy-commonvoice-24k-300ms-2ms-opus-4-en/train'
-# test_out_dataset_directory = '/workspace/noisy-commonvoice-24k-300ms-2ms-opus-4-en/test'
-
 num_processed = Value("l", 0)
 
-sample_ms = 300
-overlap_ms = 2
-
-megachunk_size = 1000
-
-process_batch_size = 1
-process_count = 48
-
-resample_lock = threading.Lock()
+# Global variables to be set by arguments
+OUTPUT_FORMAT = "lz4"  # or "opus"
+OUTPUT_DTYPE = torch.float16 # or torch.float32
 
 def discard_remainder(tensors, split_size):
     if tensors[-1].size(0) != split_size:
@@ -88,7 +45,8 @@ class AddGaussianNoise(object):
         self.mean = mean
 
     def __call__(self, tensor):
-        return tensor + torch.randn(tensor.size(), device=tensor.device) * self.std + self.mean
+        # Generate noise on CPU (faster than GPU for small tensors with transfer overhead)
+        return tensor + torch.randn_like(tensor) * self.std + self.mean
 
     def __repr__(self):
         return self.__class__.__name__ + '(mean={0}, std={1})'.format(self.mean, self.std)
@@ -103,91 +61,86 @@ def process_file(data):
     add_noise = AddGaussianNoise(std=0.1)
 
     (data_batch, batch_idx), megachunk_idx, (data_loader_len, t0, sample_size, overlap_size, resample_rate, out_dataset_directory) = data
-    
-    # print(f"batch_idx: {batch_idx}, megachunk_idx: {megachunk_idx}")
 
-    # clear_subsamples_aggregate = None
-    # noisy_subsamples_aggregate = None
+    clear_subsamples_aggregate = None
+    noisy_subsamples_aggregate = None
+    for data in data_batch:
+        if num_processed.value % 500 == 0 and num_processed.value != 0:
+            t1 = time.time()
+            elapsed = t1 - t0
+            files_per_second = num_processed.value / elapsed
+            print(
+                f"Processed {num_processed.value}/{data_loader_len} files "
+                f"({num_processed.value / data_loader_len * 100:.0f}%). "
+                f"Elapsed: {elapsed:.0f}s. "
+                f"Files/second: {files_per_second:.0f}. "
+                f"Remaining estimated hours: {(data_loader_len - num_processed.value) / files_per_second / 60 / 60:.2f}")
 
-    if len(data_batch) != 1:
-        raise ValueError("len(data_batch) != 1")
+        num_processed.value += 1
 
-    # for data in data_batch:
-    data = data_batch[0]
+        original_waveform = data[0].squeeze()
+        if original_waveform.size()[0] < sample_size:
+            return []
 
-    original_path = data[2]["path"][0]
-    original_path_no_ext = original_path.removesuffix(".mp3")
-    # print(f"original_path: {original_path} original_path_no_ext: {original_path_no_ext}")
+        noisy_waveform = add_noise(original_waveform)
 
-    if num_processed.value % 500 == 0 and num_processed.value != 0:
-        t1 = time.time()
-        elapsed = t1 - t0
-        files_per_second = num_processed.value / elapsed
-        print(
-            f"Processed {num_processed.value}/{data_loader_len} files "
-            f"({num_processed.value / data_loader_len * 100:.0f}%). "
-            f"Elapsed: {elapsed:.0f}s. "
-            f"Files/second: {files_per_second:.0f}. "
-            f"Remaining estimated hours: {(data_loader_len - num_processed.value) / files_per_second / 60 / 60:.2f}")
-
-    num_processed.value += 1
-
-    original_waveform = data[0].squeeze()
-    # with resample_lock:
-    if original_waveform.size()[0] < sample_size:
-        return []
-
-    original_waveform = original_waveform.to("cuda")
-    noisy_waveform = add_noise(original_waveform)
-
-    # print(f"original_waveform: {original_waveform.size()}, noisy_waveform: {noisy_waveform.size()}")
-    clear_subsamples = overlapping_samples(original_waveform, sample_size=sample_size, overlap_size=overlap_size)
-    noisy_subsamples = overlapping_samples(noisy_waveform, sample_size=sample_size, overlap_size=overlap_size)
-    # if clear_subsamples_aggregate is not None:
-    #     clear_subsamples_aggregate = torch.cat([clear_subsamples_aggregate, clear_subsamples], dim=0)
-    #     noisy_subsamples_aggregate = torch.cat([noisy_subsamples_aggregate, noisy_subsamples], dim=0)
-    # else:
-    #     clear_subsamples_aggregate = clear_subsamples
-    #     noisy_subsamples_aggregate = noisy_subsamples
+        clear_subsamples = overlapping_samples(original_waveform, sample_size=sample_size, overlap_size=overlap_size)
+        noisy_subsamples = overlapping_samples(noisy_waveform, sample_size=sample_size, overlap_size=overlap_size)
+        if clear_subsamples_aggregate is not None:
+            clear_subsamples_aggregate = torch.cat([clear_subsamples_aggregate, clear_subsamples], dim=0)
+            noisy_subsamples_aggregate = torch.cat([noisy_subsamples_aggregate, noisy_subsamples], dim=0)
+        else:
+            clear_subsamples_aggregate = clear_subsamples
+            noisy_subsamples_aggregate = noisy_subsamples
 
     # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-    # print(f"len(noisy_batches): {len(noisy_batches)}, len(clear_batches): {len(clear_batches)}, clear_subsamples_aggregate: {clear_subsamples_aggregate.size()}, noisy_subsamples_aggregate: {noisy_subsamples_aggregate.size()}")
 
     clips_dir = f"{out_dataset_directory}/{megachunk_idx}/clips"
     pathlib.Path(clips_dir).mkdir(parents=True, exist_ok=True)
 
     write_dicts = []
-    relative_path = f"{megachunk_idx}/clips/{original_path_no_ext}.opus"
+    
+    noisy_full = clear_subsamples_aggregate.reshape(-1)
+    clear_full = noisy_subsamples_aggregate.reshape(-1)
 
-    path_absolute = f"{out_dataset_directory}/{megachunk_idx}/clips/{original_path_no_ext}.opus"
+    # Note: permute(1,0) makes it (2, N) -> (N, 2) which is interleaved when flattened or saved as raw
+    # But torchaudio.save expects (channels, time) if channels_first=True (default)
+    # The original code did:
+    # two_channels = torch.stack([noisy_full, clear_full], dim=0).permute(1, 0).to("cpu")
+    # which is [samples, channels]
+    
+    # For Raw/LZ4, we usually want interleaved: L R L R... which corresponds to [samples, channels] flattened
+    # For Opus/Torchaudio, we pass [channels, samples] usually or specify channels_first=False
+    
+    two_channels = torch.stack([noisy_full, clear_full], dim=0).permute(1, 0).cpu()
 
-    # print(f"noisy_batch: {noisy_batch.size()}, clear_batch: {clear_batch.size()}")
+    if OUTPUT_FORMAT == "lz4":
+        relative_path = f"{megachunk_idx}/clips/{batch_idx}.wav.lz4"
+        path_absolute = f"{out_dataset_directory}/{megachunk_idx}/clips/{batch_idx}.wav.lz4"
+        
+        # Convert to target dtype
+        two_channels = two_channels.to(OUTPUT_DTYPE)
+        
+        # Use block compression to match C++ LZ4_decompress_safe
+        data = lz4.block.compress(two_channels.numpy().tobytes(), store_size=False)
+        with open(path_absolute, 'wb') as f:
+            f.write(data)
+            
+    elif OUTPUT_FORMAT == "opus":
+        relative_path = f"{megachunk_idx}/clips/{batch_idx}.opus"
+        path_absolute = f"{out_dataset_directory}/{megachunk_idx}/clips/{batch_idx}.opus"
+        
+        # Opus usually requires float32
+        two_channels = two_channels.to(torch.float32)
 
-    noisy_full = clear_subsamples.reshape(-1)
-    clear_full = noisy_subsamples.reshape(-1)
-
-    two_channels = torch.stack([noisy_full, clear_full], dim=0).permute(1, 0).to("cpu")
-
-    # print(f"two_channels: {two_channels.size()}")
-
-    # Save two_channels to path_absolute using ffmpeg-python
-    # (ffmpeg.input('pipe:0', format='f32le', ac=2, ar=resample_rate, loglevel='fatal')
-    #  .output(path_absolute, codec='libopus', format='opus').run(input=two_channels.numpy().tobytes()))
-
-    # (ffmpeg.input('pipe:0', format='f32le', ac=2, ar=resample_rate, loglevel='fatal')
-    #  .output(path_absolute, codec='libopus', format='opus')
-    #  .run_async(pipe_stdin=True)
-    #  .stdin.write(two_channels.numpy().tobytes())
-    #  .stdin.close())
-
-    torchaudio.save(
-        uri=path_absolute,
-        src=two_channels,
-        sample_rate=resample_rate,
-        format="opus",
-        channels_first=False,
-    )
+        torchaudio.save(
+            uri=path_absolute,
+            src=two_channels,
+            sample_rate=resample_rate,
+            channels_first=False,  # Input is [samples, channels]
+        )
+    else:
+        raise ValueError(f"Unknown format {OUTPUT_FORMAT}")
 
     write_dicts.append({
         "path": relative_path,
@@ -219,9 +172,9 @@ class ChunkIterable:
         return chunk_count
 
 class EnumeratedIter:
-    def __init__(self, it):
+    def __init__(self, it, start_index=0):
         self.it = it
-        self.index = 0
+        self.index = start_index
 
     def __next__(self):
         retval = (next(self.it), self.index)
@@ -231,13 +184,32 @@ class EnumeratedIter:
     def __iter__(self):
         return self
 
-def process_data():
+def process_data(args):
+    global OUTPUT_FORMAT, OUTPUT_DTYPE
+    OUTPUT_FORMAT = args.format
+    if args.dtype == "fp16":
+        OUTPUT_DTYPE = torch.float16
+    else:
+        OUTPUT_DTYPE = torch.float32
+        
+    train_out_dataset_directory = args.out_dir + "/train"
+    test_out_dataset_directory = args.out_dir + "/test"
+    
+    # Config
+    sample_ms = 300
+    overlap_ms = 2
+    megachunk_size = 1000
+    process_batch_size = 16
+    process_count = 32
+
     resample_rate = 24000
     sample_size = int((sample_ms / 1000) * resample_rate)
     overlap_size = int((overlap_ms / 1000) * resample_rate)
 
-    print(torch.__version__)
-    print(torchaudio.__version__)
+    print(f"PyTorch version: {torch.__version__}")
+    print(f"Torchaudio version: {torchaudio.__version__}")
+    print(f"Output Format: {OUTPUT_FORMAT}")
+    print(f"Output Dtype: {OUTPUT_DTYPE}")
     
     localization_subdirectories = [f.name for f in os.scandir(base_dataset_directory) if f.is_dir()]
 
@@ -246,12 +218,17 @@ def process_data():
 
     train_datasets = []
     test_datasets = []
+    locale_filter = args.locale
+    print(f"Locale filter: {locale_filter if locale_filter else 'all locales'}")
+    
     for loc_dir in localization_subdirectories:
         localized_input_base_dir = base_dataset_directory + "/" + loc_dir
-        if "en" not in loc_dir:
+        
+        # Filter by locale if specified
+        if locale_filter and locale_filter not in loc_dir:
             continue
         
-        print(localized_input_base_dir)
+        print(f"Loading from: {localized_input_base_dir}")
 
         train_dataset = torchaudio.datasets.COMMONVOICE(root=localized_input_base_dir, tsv="validated.tsv")
         train_datasets.append(train_dataset)
@@ -272,23 +249,78 @@ def process_data():
         batch_size=1,
         num_workers=16)
 
-    print(torchaudio.utils.ffmpeg_utils.get_audio_encoders())
-    print(torchaudio.list_audio_backends)
-
-    print(f"Detected {os.cpu_count()} cpus.")
-
     train_data_loader_len = len(train_data_loader)
     test_data_loader_len = len(test_data_loader)
     
-    print(f"train_data_loader_len: {train_data_loader_len}")
-    print(f"test_data_loader_len: {test_data_loader_len}")
+    # Resume logic: Skip already processed batches
+    start_batch_idx_train = 0
+    start_batch_idx_test = 0
+    if args.resume:
+        def get_max_batch_idx(directory):
+            max_idx = -1
+            if not os.path.exists(directory):
+                return -1
+            for root, dirs, files in os.walk(directory):
+                for f in files:
+                    if f.endswith(".lz4") or f.endswith(".opus"):
+                        try:
+                            # Extract idx from 'clips/{idx}.wav.lz4' or similar
+                            idx = int(f.split('.')[0])
+                            if idx > max_idx:
+                                max_idx = idx
+                        except (ValueError, IndexError):
+                            continue
+            return max_idx
+
+        # If batch N exists, we resume from N+1
+        max_idx_train = get_max_batch_idx(train_out_dataset_directory)
+        max_idx_test = get_max_batch_idx(test_out_dataset_directory)
+        
+        if max_idx_train >= 0:
+            start_batch_idx_train = max_idx_train + 1
+            print(f"Resuming train from batch {start_batch_idx_train}")
+        if max_idx_test >= 0:
+            start_batch_idx_test = max_idx_test + 1
+            print(f"Resuming test from batch {start_batch_idx_test}")
+
+    # Apply limit and resume offsets via Subset
+    start_sample_train = start_batch_idx_train * process_batch_size
+    start_sample_test = start_batch_idx_test * process_batch_size
+
+    def get_subset(dataset, start_sample, limit):
+        dataset_len = len(dataset)
+        end_sample = dataset_len
+        if limit > 0:
+            end_sample = min(limit, dataset_len)
+        
+        if start_sample >= end_sample:
+            return None
+        return torch.utils.data.Subset(dataset, range(start_sample, end_sample))
+
+    train_subset = get_subset(train_chained_dataset, start_sample_train, args.limit)
+    test_subset = get_subset(test_chained_dataset, start_sample_test, args.limit)
+
+    train_data_loader = DataLoader(train_subset, batch_size=1, num_workers=16) if train_subset else []
+    test_data_loader = DataLoader(test_subset, batch_size=1, num_workers=16) if test_subset else []
+
+    print(f"Detected {os.cpu_count()} cpus.")
+    print(f"Remaining train samples to process: {len(train_subset) if train_subset else 0}")
+    print(f"Remaining test samples to process: {len(test_subset) if test_subset else 0}")
 
     t0 = time.time()
 
-    train_chunk_iter = ChunkIterable(megachunk_size, train_data_loader_len)
-    test_chunk_iter = ChunkIterable(megachunk_size, test_data_loader_len)
+    # Initialize iterators with correct offsets
+    train_chunk_iter = ChunkIterable(megachunk_size, len(train_chained_dataset))
+    train_chunk_iter.chunk_count = (start_batch_idx_train * process_batch_size) // megachunk_size
+    train_chunk_iter.count = (start_batch_idx_train * process_batch_size) % megachunk_size
+
+    test_chunk_iter = ChunkIterable(megachunk_size, len(test_chained_dataset))
+    test_chunk_iter.chunk_count = (start_batch_idx_test * process_batch_size) // megachunk_size
+    test_chunk_iter.count = (start_batch_idx_test * process_batch_size) % megachunk_size
 
     def write_info_csv(directory):
+        if args.resume and os.path.exists(f"{directory}/info.csv"):
+            return # Don't overwrite existing info
         with open(f"{directory}/info.csv", 'w', newline='\n') as csvfile:
             info_field_names = ['sample_rate', 'sample_size', 'overlap_size']
             info_writer = csv.DictWriter(csvfile, fieldnames=info_field_names)
@@ -302,33 +334,57 @@ def process_data():
     write_info_csv(train_out_dataset_directory)
     write_info_csv(test_out_dataset_directory)
 
-    train_enumerated_batched_iter = EnumeratedIter(itertools.batched(train_data_loader, process_batch_size))
+    # Use EnumeratedIter with custom start index for CSV paths
+    train_iter = itertools.batched(train_data_loader, process_batch_size)
+    train_enumerated_batched_iter = EnumeratedIter(train_iter, start_index=start_batch_idx_train)
     train_zipped_dataset = zip(
-        train_enumerated_batched_iter, train_chunk_iter, itertools.repeat((train_data_loader_len, t0, sample_size, overlap_size, resample_rate, train_out_dataset_directory)))
+        train_enumerated_batched_iter, train_chunk_iter, itertools.repeat((len(train_chained_dataset), t0, sample_size, overlap_size, resample_rate, train_out_dataset_directory)))
 
-    test_enumerated_batched_iter = EnumeratedIter(itertools.batched(test_data_loader, process_batch_size))
+    test_iter = itertools.batched(test_data_loader, process_batch_size)
+    test_enumerated_batched_iter = EnumeratedIter(test_iter, start_index=start_batch_idx_test)
     test_zipped_dataset = zip(
-        test_enumerated_batched_iter, test_chunk_iter, itertools.repeat((test_data_loader_len, t0, sample_size, overlap_size, resample_rate, test_out_dataset_directory)))
+        test_enumerated_batched_iter, test_chunk_iter, itertools.repeat((len(test_chained_dataset), t0, sample_size, overlap_size, resample_rate, test_out_dataset_directory)))
 
+    # Reset global counter before each process_dataset call
+    # Note: num_processed is for progress reporting, not resumption logic.
+    num_processed.value = start_sample_train
     train_write_path = f"{train_out_dataset_directory}/train.csv"
-    with open(train_write_path, 'w', newline='\n') as csvfile:
-        fieldnames = ['path']
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+    process_dataset(train_write_path, train_zipped_dataset, process_count, mode='a' if args.resume else 'w')
 
-        with Pool(processes=process_count) as pool:
-            for write_dicts in pool.imap_unordered(process_file, train_zipped_dataset, chunksize=8):
-                for write_dict in write_dicts:
-                    writer.writerow(write_dict)
-
+    # Reset global counter before each process_dataset call
+    num_processed.value = start_sample_test
     test_write_path = f"{test_out_dataset_directory}/test.csv"
-    with open(test_write_path, 'w', newline='\n') as csvfile:
+    process_dataset(test_write_path, test_zipped_dataset, process_count, mode='a' if args.resume else 'w')
+
+
+def process_dataset(write_path, train_zipped_dataset, process_count, mode='w'):
+    file_exists = os.path.exists(write_path)
+    with open(write_path, mode, newline='\n') as csvfile:
         fieldnames = ['path']
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        if not (mode == 'a' and file_exists):
+            writer.writeheader()
 
         with Pool(processes=process_count) as pool:
-            for write_dicts in pool.imap_unordered(process_file, test_zipped_dataset, chunksize=8):
+            for write_dicts in pool.imap_unordered(process_file, train_zipped_dataset, chunksize=4):
                 for write_dict in write_dicts:
                     writer.writerow(write_dict)
+
 
 if __name__ == '__main__':
-    process_data()
+    parser = argparse.ArgumentParser(description="Prepare audio dataset.")
+    parser.add_argument("--format", type=str, default="lz4", choices=["lz4", "opus"], help="Output format: lz4 or opus")
+    parser.add_argument("--dtype", type=str, default="fp16", choices=["fp16", "fp32"], help="Data type: fp16 or fp32")
+    parser.add_argument("--limit", type=int, default=0, help="Limit number of samples (0 for all)")
+    parser.add_argument("--out_dir", type=str, required=True, help="Output directory")
+    parser.add_argument("--resume", action="store_true", help="Resume from where it left off based on output directory content")
+    parser.add_argument("--locale", type=str, default=None, help="Filter by locale (e.g., 'en' for English only). If not set, uses all locales.")
+
+    args = parser.parse_args()
+    
+    # Examples:
+    # python -m clarification.datas.prepare_data --format lz4 --dtype fp16 --limit 1000 --out_dir /workspace/test_data
+    # python -m clarification.datas.prepare_data --format opus --dtype fp32 --out_dir /workspace/full_opus_data
+    # python -m clarification.datas.prepare_data --format opus --locale en --out_dir /workspace/english_opus_data
+    
+    process_data(args)

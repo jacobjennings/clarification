@@ -75,6 +75,8 @@ class AudioTrainerConfig:
 class TrainMultipleConfig:
     trainer_configs: Sequence[AudioTrainerConfig]
     should_perform_memory_test: bool = False
+    resume_from_run_dir: Optional[str] = None
+    auto_resume: bool = True
 
     def __post_init__(self):
         pass
