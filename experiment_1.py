@@ -90,18 +90,22 @@ class Experiment1:
         )
         return trainer_config
 
-    def simple_config(self, name, layer_sizes, use_scheduled_loss=True):
+    def simple_config(self, name, layer_sizes, use_scheduled_loss=True, loss_fn=None):
         log_config = c.configs.PresetLogBehaviorConfig1(
             log_info_every_batches=50000,
             runs_subdir_name=f"{self.training_date_str}-{name}",
             send_audio_clip_every_batches=100000
         )
 
-        # Use scheduled loss: Three-phase training
-        # Phase 1 (0-500k): L1 only - establishes basic structure
-        # Phase 2 (500k-1M): Mix of SI-SDR and Mel-STFT - perceptual refinement
-        # Phase 3 (1M+): Mel-STFT only - final quality polish
-        if use_scheduled_loss:
+        # Determine loss configuration
+        if loss_fn is not None:
+            # Use explicitly provided loss function
+            loss_configs = loss_fn(self.dataset_config)
+        elif use_scheduled_loss:
+            # Use scheduled loss: Three-phase training
+            # Phase 1 (0-500k): L1 only - establishes basic structure
+            # Phase 2 (500k-1M): Mix of SI-SDR and Mel-STFT - perceptual refinement
+            # Phase 3 (1M+): Mel-STFT only - final quality polish
             loss_configs = c.configs.loss_group_three_phase(
                 self.dataset_config,
                 phase1_end=500000,
@@ -212,8 +216,13 @@ class Experiment1:
             # self.simple_config("simple1M-1", [72, 120, 168, 216, 168, 120, 72]),
             # self.simple_config("simple2M-1", [160, 192, 224, 256, 224, 192, 160]),
 
-
-            self.simple_config("simple100k-fp16-1", [80, 80, 80, 80, 80]),
+            # Three-phase scheduled loss (default)
+            # self.simple_config("simple100k-fp16-1", [80, 80, 80, 80, 80]),
+            
+            # Loss function comparison experiments (same architecture, different losses)
+            self.simple_config("simple100k-L1", [80, 80, 80, 80, 80], loss_fn=c.configs.loss_l1_only),
+            self.simple_config("simple100k-SISDR", [80, 80, 80, 80, 80], loss_fn=c.configs.loss_sisdr_only),
+            self.simple_config("simple100k-MelSTFT", [80, 80, 80, 80, 80], loss_fn=c.configs.loss_melstft_only),
         ]
 
         train_multiple_config = c.training.train_multiple.TrainMultipleConfig(

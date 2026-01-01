@@ -58,7 +58,7 @@ def overlapping_samples(audio, sample_size, overlap_size):
 
 
 def process_file(data):
-    add_noise = AddGaussianNoise(std=0.1)
+    add_noise = AddGaussianNoise(std=0.07)
 
     (data_batch, batch_idx), megachunk_idx, (data_loader_len, t0, sample_size, overlap_size, resample_rate, out_dataset_directory) = data
 

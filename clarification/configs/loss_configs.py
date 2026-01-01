@@ -135,6 +135,59 @@ def loss_group_2(dataset_config: DatasetConfig,
     ]
 
 
+# ============================================================================
+# Single Loss Function Groups (for comparison experiments)
+# ============================================================================
+
+def loss_l1_only(dataset_config: DatasetConfig,
+                 device: Optional[torch.device] = None) -> Sequence[AudioLossFunctionConfig]:
+    """L1 Loss only - simple absolute difference."""
+    if not device:
+        device = torch.get_default_device()
+    return [
+        AudioLossFunctionConfig(
+            name="L1Loss",
+            weight=1.0,
+            fn=nn.L1Loss().to(device),
+            is_unary=False,
+        ),
+    ]
+
+
+def loss_sisdr_only(dataset_config: DatasetConfig,
+                    device: Optional[torch.device] = None) -> Sequence[AudioLossFunctionConfig]:
+    """Scale-Invariant Signal-to-Distortion Ratio Loss only."""
+    if not device:
+        device = torch.get_default_device()
+    return [
+        AudioLossFunctionConfig(
+            name="SISDRLoss",
+            weight=1.0,
+            fn=auraloss.time.SISDRLoss().to(device),
+            is_unary=False,
+        ),
+    ]
+
+
+def loss_melstft_only(dataset_config: DatasetConfig,
+                      device: Optional[torch.device] = None) -> Sequence[AudioLossFunctionConfig]:
+    """Mel-Spectrogram STFT Loss only - perceptual frequency-domain loss."""
+    if not device:
+        device = torch.get_default_device()
+    return [
+        AudioLossFunctionConfig(
+            name="MelSTFTLoss",
+            weight=1.0,
+            fn=auraloss.freq.MelSTFTLoss(
+                sample_rate=dataset_config.sample_rate,
+                n_mels=128,
+                device=device
+            ).to(device),
+            is_unary=False,
+        ),
+    ]
+
+
 def loss_group_scheduled(dataset_config: DatasetConfig,
                          device: Optional[torch.device] = None,
                          transition_steps: int = 500000) -> Sequence[AudioLossFunctionConfig]:
