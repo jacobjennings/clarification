@@ -2,6 +2,7 @@ import torch
 from torch.optim.lr_scheduler import LRScheduler
 from bisect import bisect_right
 
+
 class InterpolatingLR(LRScheduler):
     """
     Linearly interpolates learning rate based on a list of (step, target) tuples.
@@ -20,8 +21,10 @@ class InterpolatingLR(LRScheduler):
 
     def __init__(self, optimizer, milestones, last_epoch=-1):
         self.milestones = milestones
-        self.milestone_steps, self.milestone_lrs = zip(*milestones)  # Unzip for easier access
-        
+        self.milestone_steps, self.milestone_lrs = zip(
+            *milestones
+        )  # Unzip for easier access
+
         super().__init__(optimizer, last_epoch)
 
     def get_lr(self):
@@ -29,8 +32,10 @@ class InterpolatingLR(LRScheduler):
         Calculates the current learning rate for each parameter group.
         """
         if not self._get_lr_called_within_step:
-            print("Warning: To get the last learning rate computed by the scheduler, "
-                         "please use `get_last_lr()`.")
+            print(
+                "Warning: To get the last learning rate computed by the scheduler, "
+                "please use `get_last_lr()`."
+            )
 
         if self.last_epoch == 0:
             return self.base_lrs
@@ -52,7 +57,7 @@ class InterpolatingLR(LRScheduler):
             next_lr = self.milestone_lrs[idx]
 
             fraction = (self.last_epoch - prev_step) / (next_step - prev_step)
-                        
+
             lrs = []
             for group in self.optimizer.param_groups:
                 interpolated_lr = prev_lr + fraction * (next_lr - prev_lr)
