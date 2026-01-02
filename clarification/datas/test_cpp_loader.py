@@ -53,12 +53,12 @@ class TestCppLoader(unittest.TestCase):
                 use_lz4=True
             )
             
-            print(f"Successfully initialized loader. Total files: {len(loader)}")
+            print(f"Successfully initialized loader. Total files: {loader.total_files}")
             
-            # Check length reporting
-            total_files = loader.loader.total_files()
-            self.assertEqual(len(loader), total_files)
-            print(f"Loader length reported correctly: {len(loader)}")
+            # Check total_files property
+            total_files = loader.total_files
+            self.assertEqual(total_files, loader.loader.total_files())
+            print(f"Total files reported correctly: {total_files}")
             
             # Iterate through more batches to check performance/stability
             num_batches_to_test = 200

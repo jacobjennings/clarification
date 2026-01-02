@@ -161,6 +161,10 @@ class PythonDataLoader:
     Uses single-threaded loading to avoid multiprocessing pickle issues
     with lz4 module. This is intentional - we want an apples-to-apples
     comparison of the core loading logic, not multiprocessing overhead.
+    
+    Note: This loader does not support __len__ because the number of iterations
+    depends on the variable number of audio chunks per file, which is not known
+    without reading all files. Use file_idx for progress tracking and resuming.
     """
     
     def __init__(self, 
@@ -202,6 +206,7 @@ class PythonDataLoader:
         self._buffer = []  # Buffer for partial batches
     
     def __iter__(self):
+        self.reset()
         return self
     
     def __next__(self) -> torch.Tensor:
@@ -212,8 +217,7 @@ class PythonDataLoader:
         """
         while len(self._buffer) < self.batch_size:
             if self._file_idx >= len(self.dataset):
-                # Reset for next epoch
-                self._file_idx = 0
+                # End of epoch
                 if len(self._buffer) == 0:
                     raise StopIteration
                 break
@@ -244,6 +248,43 @@ class PythonDataLoader:
         self._file_idx = 0
         self._buffer = []
     
+    def __len__(self):
+        """
+        Not supported - chunk count per file varies, so total iterations unknown.
+        Use total_files and file_idx for progress tracking instead.
+        """
+        raise TypeError(
+            "PythonDataLoader does not support __len__ because the number of iterations "
+            "depends on variable chunk counts per file. Use total_files and file_idx "
+            "for progress tracking."
+        )
+    
+    @property
     def total_files(self) -> int:
-        """Return total number of files in dataset."""
+        """Return total number of files in the dataset."""
         return len(self.dataset)
+    
+    @property
+    def file_idx(self) -> int:
+        """Return current file index (for progress tracking and resume)."""
+        return self._file_idx
+    
+    def skip_to_file(self, target_file_idx: int):
+        """
+        Skip forward to a specific file index for resuming training.
+        
+        Args:
+            target_file_idx: The file index to skip to (0-based)
+        """
+        if target_file_idx <= 0:
+            return
+        
+        # Reset and set file index directly (Python loader can do this efficiently)
+        self.reset()
+        self._file_idx = min(target_file_idx, len(self.dataset))
+        print(f"Skipped to file index {self._file_idx} (target was {target_file_idx})")
+    
+    @property
+    def pin_memory_device(self):
+        """Return device string for compatibility with CppDataLoader."""
+        return str(self.device)

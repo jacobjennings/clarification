@@ -46,6 +46,12 @@ class AudioTrainer:
 
         if self.s.data_loader_iter is None:
             print(f"Loading training iterator for {self.m.name} on device {self.m.dataset_loader.pin_memory_device}")
+            
+            # Fast-forward to saved file index if resuming
+            if self.s.data_loader_file_idx > 0:
+                print(f"INFO: Resuming {self.m.name} data loader from file index {self.s.data_loader_file_idx}...")
+                self.m.dataset_loader.skip_to_file(self.s.data_loader_file_idx)
+            
             self.s.data_loader_iter = iter(self.m.dataset_loader)
 
         # TODO WRONG TIME CALCULATIONS WHEN PAUSED
@@ -124,8 +130,8 @@ class AudioTrainer:
             self.s.batches_trained += bpi
             self.s.batches_since_last_save += bpi
             self.s.batches_since_last_send_audio += bpi
-            self.s.samples_processed += bpi * self.d.samples_per_iteration
-            self.s.samples_processed_since_last_log += bpi * self.d.samples_per_iteration
+            self.s.samples_processed += self.d.samples_per_iteration
+            self.s.samples_processed_since_last_log += self.d.samples_per_iteration
             self.s.iteration_count += 1
             self.s.batches_since_last_validation += bpi
             self.s.batches_since_last_profile += bpi
@@ -160,10 +166,6 @@ class AudioTrainer:
                 
                 torch.save(self.m.model.state_dict(), model_save_path)
                 self.s.batches_since_last_save = 0
-
-            if self.s.batches_trained >= self.m.mixed_precision_config.stop_amp_after_batches:
-                self.s.scaler = None
-                self.m.mixed_precision_config.use_scaler_dtype = None
 
             if batch_count_this_rotation >= self.m.batches_per_rotation:
                 break
@@ -200,14 +202,27 @@ class AudioTrainer:
         self.w.add_scalar("iterations_per_second",
                           self.s.iteration_count / elapsed_training_time,
                           self.s.batches_trained)
-        batches_complete = self.s.iteration_count * self.d.batches_per_iteration
-        batches_per_second = batches_complete / elapsed_training_time
-        self.w.add_scalar("epoch_percentage_complete",
-                          batches_complete / self.m.dataset_batches_total_length * 100,
-                          self.s.batches_trained)
-        self.w.add_scalar("epoch_estimated_time_per_epoch_minutes",
-                          self.m.dataset_batches_total_length / batches_per_second / 60,
-                          self.s.batches_trained)
+        
+        # Calculate epoch percentage based on file index
+        current_file_idx = self.m.dataset_loader.file_idx
+        total_files = self.m.dataset_loader.total_files
+        if total_files > 0:
+            # Track file index within current epoch
+            file_idx_in_epoch = current_file_idx % total_files
+            epoch_pct = file_idx_in_epoch / total_files * 100
+            self.w.add_scalar("epoch_percentage_complete", epoch_pct, self.s.batches_trained)
+            self.w.add_scalar("files_processed_in_epoch", file_idx_in_epoch, self.s.batches_trained)
+            
+            # Estimate time per epoch based on files/second
+            if elapsed_training_time > 0:
+                files_per_second = current_file_idx / elapsed_training_time
+                if files_per_second > 0:
+                    estimated_epoch_minutes = total_files / files_per_second / 60
+                    self.w.add_scalar("epoch_estimated_time_per_epoch_minutes", 
+                                      estimated_epoch_minutes, self.s.batches_trained)
+            
+            # Save file_idx for resume
+            self.s.data_loader_file_idx = current_file_idx
 
     def run_iteration(
             self,
@@ -266,8 +281,12 @@ class AudioTrainer:
         if self.s.scaler and allow_mixed_precision:
             with autocast("cuda", dtype=self.m.mixed_precision_config.use_scaler_dtype):
                 prediction_raw = self.run_model(input_unsqueezed)
-            prediction_raw = self.s.scaler.scale(prediction_raw)
+            # Note: GradScaler.scale() is only used on the loss during backward pass,
+            # NOT on predictions. The scaler handles gradient scaling automatically.
         else:
+            # Cast input to float32 when not using mixed precision (e.g., during validation)
+            # to match model weight dtype
+            input_unsqueezed = input_unsqueezed.float()
             prediction_raw = self.run_model(input_unsqueezed)
 
         if not self.m.training_classifier:
@@ -294,7 +313,7 @@ class AudioTrainer:
         # print(f"Memory reserved: {torch.cuda.memory_reserved() / 1024 / 1024} MB")
         # print(f"Max memory allocated: {torch.cuda.max_memory_allocated() / 1024 / 1024} MB")
 
-        _, weighted_losses = self.loss_calculation(
+        total_loss, _ = self.loss_calculation(
             golden_classifier_values,
             golden_reconstructed,
             prediction,
@@ -317,23 +336,16 @@ class AudioTrainer:
         if not is_validation:
             optimizer.zero_grad(set_to_none=True)
 
-            # Log cuda memory
-            # print("Before first backward")
-            # print(f"Memory allocated: {torch.cuda.memory_allocated() / 1024 / 1024} MB")
-            # print(f"Memory reserved: {torch.cuda.memory_reserved() / 1024 / 1024} MB")
-            # print(f"Max memory allocated: {torch.cuda.max_memory_allocated() / 1024 / 1024} MB")
-
-            while weighted_losses:
-                loss = weighted_losses.pop()
-                loss.backward(retain_graph=len(weighted_losses) != 0)
-                del loss
-                # print("After backward")
-                # print(f"Memory allocated: {torch.cuda.memory_allocated() / 1024 / 1024} MB")
-                # print(f"Memory reserved: {torch.cuda.memory_reserved() / 1024 / 1024} MB")
-                # print(f"Max memory allocated: {torch.cuda.max_memory_allocated() / 1024 / 1024} MB")
+            # Single backward pass on total loss (much more memory efficient than
+            # multiple backwards with retain_graph=True)
+            if self.s.scaler and allow_mixed_precision:
+                self.s.scaler.scale(total_loss).backward()
+            else:
+                total_loss.backward()
+            del total_loss
 
             if self.s.scaler and allow_mixed_precision:
-                self.s.scaler.unscale_(optimizer)  # Unscale before clipping
+                self.s.scaler.unscale_(optimizer)  # Unscale gradients before clipping
 
             if self.m.norm_clip:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=self.m.norm_clip)
@@ -421,25 +433,13 @@ class AudioTrainer:
                 goldens_loss = better_split_discard_remainder(goldens_loss, loss_config.batch_size)
 
             if loss_config.is_unary:
-
                 # TODO             next_input = next_input.view(-1, self.d.samples_per_batch * self.d.dataset_batch_size)
-                if self.s.scaler and allow_mixed_precision:
-                    with autocast("cuda", dtype=self.m.mixed_precision_config.use_scaler_dtype):
-                        loss_out = loss_config.fn(prediction_loss)
-                    loss_out = self.s.scaler.scale(loss_out)
-                else:
-                    loss_out = loss_config.fn(prediction_loss)
+                loss_out = loss_config.fn(prediction_loss)
                 loss_out = torch.mean(loss_out)
             else:
-                if self.s.scaler and allow_mixed_precision:
-                    with autocast("cuda", dtype=self.m.mixed_precision_config.use_scaler_dtype):
-                        loss_out = loss_config.fn(prediction_loss, goldens_loss)
-                    loss_out = self.s.scaler.scale(loss_out)
-                else:
-                    loss_out = loss_config.fn(prediction_loss, goldens_loss)
-
-            if self.s.scaler and allow_mixed_precision:
-                loss_out *= self.m.mixed_precision_config.amp_loss_scalar
+                loss_out = loss_config.fn(prediction_loss, goldens_loss)
+            # Note: GradScaler.scale() is applied during backward(), not here.
+            # Loss values are computed and logged without scaling.
 
             # Get dynamic weight based on current step (supports scheduled weights)
             current_weight = loss_config.get_weight(self.s.batches_trained)
@@ -527,41 +527,45 @@ class AudioTrainer:
 
     def reset_epoch(self):
         print(f"Resetting epoch / iter for {self.m.name}")
+        self.s.epoch_count += 1
         self.s.data_loader_iter = iter(self.m.dataset_loader)
 
     def run_validation(self):
         validation_batch_count = 0
         input_loader_iter = iter(self.m.validation_config.test_loader)
         iterations_since_step = 0
-        while True:
-            should_log_extra_stuff = (self.s.batches_since_last_log + self.d.batches_per_iteration
-                                      > self.m.validation_config.log_every_batches)
-            should_step_optimizer = False
-            if iterations_since_step == self.m.step_every_iterations or self.m.step_every_iterations == 1:
-                iterations_since_step = 0
-                should_step_optimizer = True
+        
+        # Disable gradient computation during validation to save VRAM
+        with torch.no_grad():
+            while True:
+                should_log_extra_stuff = (self.s.batches_since_last_log + self.d.batches_per_iteration
+                                          > self.m.validation_config.log_every_batches)
+                should_step_optimizer = False
+                if iterations_since_step == self.m.step_every_iterations or self.m.step_every_iterations == 1:
+                    iterations_since_step = 0
+                    should_step_optimizer = True
 
-            self.run_iteration(
-                input_loader_iter=input_loader_iter,
-                should_record_audio_clips=False,
-                should_log_extra_stuff=should_log_extra_stuff,
-                writer_step=self.s.batches_validated,
-                should_step_optimizer=should_step_optimizer,
-                allow_mixed_precision=False,
-                is_validation=True
-            )
-            bpi = self.d.batches_per_iteration
+                self.run_iteration(
+                    input_loader_iter=input_loader_iter,
+                    should_record_audio_clips=False,
+                    should_log_extra_stuff=should_log_extra_stuff,
+                    writer_step=self.s.batches_trained,  # Use training step so validation aligns with training in TensorBoard
+                    should_step_optimizer=should_step_optimizer,
+                    allow_mixed_precision=False,
+                    is_validation=True
+                )
+                bpi = self.d.batches_per_iteration
 
-            iterations_since_step += 1
-            validation_batch_count += bpi
-            self.s.batches_validated += bpi
-            self.s.batches_since_last_log += bpi
+                iterations_since_step += 1
+                validation_batch_count += bpi
+                self.s.batches_validated += bpi
+                self.s.batches_since_last_log += bpi
 
-            if should_log_extra_stuff:
-                self.s.batches_since_last_log = 0
+                if should_log_extra_stuff:
+                    self.s.batches_since_last_log = 0
 
-            if validation_batch_count >= self.m.validation_config.test_batches:
-                break
+                if validation_batch_count >= self.m.validation_config.test_batches:
+                    break
 
     def reconstruct_overlapping_samples_nofade(self, samples: torch.Tensor):
         num_batches = samples.size()[0]

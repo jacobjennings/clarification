@@ -1,9 +1,7 @@
 """1D u-net."""
 
-import math
 import torch
 import torch.nn as nn
-import torch.nn.functional as nnF
 import logging
 
 logger = logging.getLogger(__name__)
@@ -39,8 +37,8 @@ class ClarificationDense(nn.Module):
         if device is None:
             device = torch.get_default_device()
 
-        # if len(layer_sizes) % 2 == 0:
-        #     raise ValueError("The number of layers must be odd.")
+        if len(layer_sizes) % 2 == 0:
+            raise ValueError("The number of layers must be odd.")
 
         layer_sizes_len = len(layer_sizes)
         self.invert = invert

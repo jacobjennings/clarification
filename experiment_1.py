@@ -21,19 +21,20 @@ from clarification.util import *
 # batches_per_iteration = 256
 # batches_per_iteration = 288
 # batches_per_iteration = 320
+# batches_per_iteration = 340
 # batches_per_iteration = 352
 # batches_per_iteration = 384
 # batches_per_iteration = 416
 # batches_per_iteration = 448
 # batches_per_iteration = 480
-# batches_per_iteration = 512
+batches_per_iteration = 512
 # batches_per_iteration = 640
 # batches_per_iteration = 768
 # batches_per_iteration = 896
 # batches_per_iteration = 1024
 # batches_per_iteration = 1152
 # batches_per_iteration = 1280
-batches_per_iteration = 1408
+# batches_per_iteration = 1408
 # batches_per_iteration = 1536
 # batches_per_iteration = 1664
 # batches_per_iteration = 1792
@@ -41,7 +42,7 @@ batches_per_iteration = 1408
 # batches_per_iteration = 2048
 
 # Set to True to start fresh (no weight loading, new TensorBoard directory)
-FRESH_START = True
+FRESH_START = False
 
 def start_tensorboard(logdir):
     subprocess.run(["venv/bin/tensorboard", "--logdir", logdir, "--bind_all"])
@@ -54,20 +55,16 @@ class Experiment1:
         self.training_date_str = ""
 
 
-    def dense_config(self, name, layer_sizes, use_scheduled_loss=True):
+    def dense_config(self, name, layer_sizes, loss_fn=None, mixed_precision_config=None):
         log_config = c.configs.PresetLogBehaviorConfig1(
             log_info_every_batches=50000,
             runs_subdir_name=f"{self.training_date_str}-{name}",
             send_audio_clip_every_batches=100000
         )
 
-        # Use scheduled loss: Three-phase training
-        if use_scheduled_loss:
-            loss_configs = c.configs.loss_group_three_phase(
-                self.dataset_config,
-                phase1_end=500000,
-                phase2_end=1000000
-            )
+        # Determine loss configuration
+        if loss_fn is not None:
+            loss_configs = loss_fn(self.dataset_config)
         else:
             loss_configs = c.configs.loss_group_2(self.dataset_config)
 
@@ -81,6 +78,7 @@ class Experiment1:
             training_date_str=self.training_date_str,
             validation_config=self.validation_config,
             loss_function_configs=loss_configs,
+            mixed_precision_config=mixed_precision_config,
         )
 
         trainer_config = c.configs.AudioTrainerConfig(
@@ -90,7 +88,7 @@ class Experiment1:
         )
         return trainer_config
 
-    def simple_config(self, name, layer_sizes, use_scheduled_loss=True, loss_fn=None):
+    def simple_config(self, name, layer_sizes, use_scheduled_loss=True, loss_fn=None, mixed_precision_config=None):
         log_config = c.configs.PresetLogBehaviorConfig1(
             log_info_every_batches=50000,
             runs_subdir_name=f"{self.training_date_str}-{name}",
@@ -124,6 +122,7 @@ class Experiment1:
             training_date_str=self.training_date_str,
             validation_config=self.validation_config,
             loss_function_configs=loss_configs,
+            mixed_precision_config=mixed_precision_config,
         )
 
         trainer_config = c.configs.AudioTrainerConfig(
@@ -176,7 +175,8 @@ class Experiment1:
             dataset_batch_size=dataset_config.dataset_batch_size,
             batches_per_iteration=dataset_config.batches_per_iteration,
             use_cpp_loader=use_cpp_loader,
-            dataset_path=dataset_path
+            dataset_path=dataset_path,
+            num_preload_batches=8  # Reduce from 16 to save ~2GB VRAM
         )
         dataset_loader.create_loaders()
 
@@ -190,7 +190,10 @@ class Experiment1:
 
     def train(self):
         self.training_date_str = datetime.datetime.now().strftime('%Y-%m-%d__%H-%M-%S')
-        torch.set_default_dtype(torch.float16)
+
+        # Enable AMP (Automatic Mixed Precision) for faster training with numerical stability
+        # Using bfloat16 which has the same exponent range as float32, avoiding NaN issues
+        amp_config = c.configs.MixedPrecisionConfig(use_scaler_dtype=torch.bfloat16)
 
         configs = [
             # resnet_config(training_date_str, "resnet450k-1", resnet_dataset_config, resnet_dataset_loader, resnet_validation_config, 152, 11, 128),
@@ -221,16 +224,32 @@ class Experiment1:
             
             # Loss function comparison experiments (same architecture, different losses)
             # Individual loss functions
-            self.simple_config("simple100k-2-L1", [64, 64, 64, 64, 64], loss_fn=c.configs.loss_l1_only),
-            self.simple_config("simple100k-2-SISDR", [64, 64, 64, 64, 64], loss_fn=c.configs.loss_sisdr_only),
-            self.simple_config("simple100k-2-MelSTFT", [64, 64, 64, 64, 64], loss_fn=c.configs.loss_melstft_only),
+
+            # self.simple_config("simple100k-2-L1", [64, 64, 64, 64, 64], loss_fn=c.configs.loss_l1_only),
+            # self.simple_config("simple100k-2-SISDR", [64, 64, 64, 64, 64], loss_fn=c.configs.loss_sisdr_only),
+            # self.simple_config("simple100k-2-MelSTFT", [64, 64, 64, 64, 64], loss_fn=c.configs.loss_melstft_only),
             
             # Combined loss groups (static weights)
-            self.simple_config("simple100k-2-group1", [64, 64, 64, 64, 64], loss_fn=c.configs.loss_group_1),  # L1+SISDR+MelSTFT
-            self.simple_config("simple100k-2-group2", [64, 64, 64, 64, 64], loss_fn=c.configs.loss_group_2),  # SISDR+MelSTFT
+            # self.simple_config("simple100k-2-group1", [64, 64, 64, 64, 64], loss_fn=c.configs.loss_group_1),  # L1+SISDR+MelSTFT
+            # self.simple_config("simple100k-2-group2", [64, 64, 64, 64, 64], loss_fn=c.configs.loss_group_2),  # SISDR+MelSTFT
+
+
             
             # Scheduled loss groups (dynamic weights)
-            self.simple_config("simple100k-2-scheduled", [64, 64, 64, 64, 64]),  # uses default three-phase
+            # self.simple_config("simple100k-2-scheduled", [64, 64, 64, 64, 64]),  # uses default three-phase
+
+
+            # self.simple_config("simple100k-3-scheduled", [96, 112, 128, 112, 96]),  # uses default three-phase
+            # self.simple_config("simple100k-3-loss-group-1", [96, 112, 128, 112, 96], loss_fn=c.configs.loss_group_1)
+
+            # self.dense_config("dense1", [80, 144, 80], loss_fn=c.configs.loss_group_1, mixed_precision_config=amp_config),
+            # self.dense_config("dense2", [56, 72, 88, 72, 56], loss_fn=c.configs.loss_group_1, mixed_precision_config=amp_config),
+            # self.dense_config("dense3", [40, 72, 104, 72, 40], loss_fn=c.configs.loss_group_1, mixed_precision_config=amp_config),
+            
+            # self.dense_config("dense4", [104, 120, 136, 120, 104], loss_fn=c.configs.loss_group_1, mixed_precision_config=amp_config),
+
+            self.dense_config("dense5", [56, 48, 40, 48, 56], loss_fn=c.configs.loss_group_1, mixed_precision_config=amp_config),
+            self.dense_config("dense6", [24, 56, 88, 56, 24], loss_fn=c.configs.loss_group_1, mixed_precision_config=amp_config),
         ]
 
         train_multiple_config = c.training.train_multiple.TrainMultipleConfig(

@@ -117,7 +117,7 @@ def loss_group_1(dataset_config: DatasetConfig,
         AudioLossFunctionConfig(
             name="L1Loss", weight=1.0, fn=nn.L1Loss().to(device), is_unary=False, batch_size=None),
         AudioLossFunctionConfig(
-            name="SISDRLoss", weight=0.1, fn=auraloss.time.SISDRLoss().to(device), is_unary=False, batch_size=None),  # Lower weight - SI-SDR has larger magnitude
+            name="SISDRLoss", weight=0.25, fn=auraloss.time.SISDRLoss().to(device), is_unary=False, batch_size=None),
         AudioLossFunctionConfig(
             name="MelSTFTLoss", weight=0.5,
             fn=auraloss.freq.MelSTFTLoss(sample_rate=dataset_config.sample_rate, n_mels=128, device=device).to(device),

@@ -59,7 +59,6 @@ class ModelTrainingConfig:
     mixed_precision_config: Optional[MixedPrecisionConfig] = None
 
     def __post_init__(self):
-        self.dataset_batches_total_length = len(self.dataset_loader)
         if not self.mixed_precision_config:
             self.mixed_precision_config = MixedPrecisionConfig()
 
@@ -100,12 +99,12 @@ class PresetTrainingConfig1(ModelTrainingConfig):
             self.loss_function_configs = loss_group_2(self.dataset_config, self.device)
 
         if not self.optimizer:
-            self.optimizer = torch.optim.SGD(params=self.training_model().parameters(), lr=0.1)
+            self.optimizer = torch.optim.Adam(params=self.training_model().parameters(), lr=0.001)
 
         if not self.scheduler:
             self.scheduler = clarification.schedulers.InterpolatingLR(
                 optimizer=self.optimizer,
-                milestones=[(0, 0.2), (500000, 0.001)])
+                milestones=[(0, 0.0001), (5000000, 0.00001)])
 
         if not self.dataset_config:
             self.dataset_config = PresetDatasetConfig1(batches_per_iteration=self.batches_per_iteration,

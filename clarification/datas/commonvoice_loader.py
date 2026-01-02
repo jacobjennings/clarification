@@ -24,7 +24,8 @@ class CommonVoiceLoader:
                  num_workers,
                  device,
                  use_cpp_loader=False,
-                 use_lz4=True):
+                 use_lz4=True,
+                 num_preload_batches=16):
         self.base_dir = base_dir
         self.dataset_batch_size = dataset_batch_size
         self.loader_batch_size = batches_per_iteration // dataset_batch_size
@@ -38,6 +39,7 @@ class CommonVoiceLoader:
         self.test_loader = None
         self.use_cpp_loader = use_cpp_loader
         self.use_lz4 = use_lz4
+        self.num_preload_batches = num_preload_batches
 
     def create_loaders(self):
         """Creates loaders"""
@@ -56,7 +58,7 @@ class CommonVoiceLoader:
                 base_dir=self.base_dir + "/train",
                 csv_filename="train.csv",
                 batch_size=total_batch_size,
-                num_preload_batches=16,
+                num_preload_batches=self.num_preload_batches,
                 num_threads=self.num_workers,
                 use_lz4=self.use_lz4
             )
@@ -66,7 +68,7 @@ class CommonVoiceLoader:
                 base_dir=self.base_dir + "/test",
                 csv_filename="test.csv",
                 batch_size=total_batch_size,
-                num_preload_batches=4,
+                num_preload_batches=min(4, self.num_preload_batches),  # Validation needs fewer
                 num_threads=1,
                 use_lz4=self.use_lz4
             )

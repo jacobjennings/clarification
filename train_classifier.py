@@ -145,9 +145,12 @@ def train():
 
     loader.create_loaders()
 
-    summary_writer.add_text("loader_info",
-                            f"Training data size in batches: {len(loader.train_loader)}, samples: {len(loader.train_loader) * samples_per_batch}")
+    total_files = loader.train_loader.total_files
+    summary_writer.add_text("loader_info", f"Training data: {total_files} files")
 
+    # NOTE: This file uses an old AudioTrainer API that no longer exists.
+    # AudioTrainer now only accepts an AudioTrainerConfig object.
+    # This file needs to be updated to use the new config-based API.
     trainer = clarification.training.AudioTrainer(
         input_dataset_loader=loader.train_loader,
         models=models,
@@ -162,7 +165,6 @@ def train():
         model_weights_save_every_iterations=1000,
         summary_writer=summary_writer,
         send_audio_clip_every_iterations=100,
-        dataset_batches_total_length=len(loader.train_loader),
         training_classifier=True
     )
 

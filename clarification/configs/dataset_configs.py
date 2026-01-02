@@ -39,7 +39,7 @@ class PresetDatasetConfig1(DatasetConfig):
 
 class PresetCommonVoiceLoader(CommonVoiceLoader):
     def __init__(self, dataset_batch_size, batches_per_iteration, device: Optional[torch.device] = None, 
-                 use_cpp_loader=False, dataset_path=None, use_lz4=False):
+                 use_cpp_loader=False, dataset_path=None, use_lz4=False, num_preload_batches=16):
         if dataset_path:
             base_dir = dataset_path
         else:
@@ -52,7 +52,7 @@ class PresetCommonVoiceLoader(CommonVoiceLoader):
             device = str(torch.get_default_device())
 
         print(f"PresetCommonVoiceLoader device: {device}, use_cpp_loader: {use_cpp_loader}, "
-              f"use_lz4: {use_lz4}, base_dir: {base_dir}")
+              f"use_lz4: {use_lz4}, base_dir: {base_dir}, num_preload_batches: {num_preload_batches}")
 
         super().__init__(base_dir=base_dir,
                          dataset_batch_size=dataset_batch_size,
@@ -61,4 +61,5 @@ class PresetCommonVoiceLoader(CommonVoiceLoader):
                          num_workers=8,
                          device=device,
                          use_cpp_loader=use_cpp_loader,
-                         use_lz4=use_lz4)
+                         use_lz4=use_lz4,
+                         num_preload_batches=num_preload_batches)

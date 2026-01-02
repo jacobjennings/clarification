@@ -35,6 +35,10 @@ class CppDataLoader:
     """
     Python wrapper for the C++ audio dataset loaders.
     Supports both LZ4 compressed raw audio and Opus encoded audio.
+    
+    Note: This loader does not support __len__ because the number of iterations
+    depends on the variable number of audio chunks per file, which is not known
+    without reading all files. Use file_idx for progress tracking and resuming.
     """
     
     def __init__(
@@ -120,10 +124,64 @@ class CppDataLoader:
             self.loader.reset()
 
     def __len__(self):
+        """
+        Not supported - chunk count per file varies, so total iterations unknown.
+        Use total_files and file_idx for progress tracking instead.
+        """
+        raise TypeError(
+            "CppDataLoader does not support __len__ because the number of iterations "
+            "depends on variable chunk counts per file. Use total_files and file_idx "
+            "for progress tracking."
+        )
+    
+    @property
+    def total_files(self) -> int:
         """Return total number of files in the dataset."""
         if self.loader is None:
             return 0
         return self.loader.total_files()
+    
+    @property
+    def file_idx(self) -> int:
+        """Return current file index (for progress tracking and resume)."""
+        if self.loader is None:
+            return 0
+        return self.loader.file_idx
+    
+    def skip_to_file(self, target_file_idx: int):
+        """
+        Skip forward to a specific file index for resuming training.
+        
+        Note: This resets the loader and fast-forwards by consuming batches
+        until the target file index is reached. Some overshoot may occur
+        due to preloading.
+        
+        Args:
+            target_file_idx: The file index to skip to (0-based)
+        """
+        if self.loader is None:
+            return
+        
+        if target_file_idx <= 0:
+            return
+            
+        # Reset to start
+        self.loader.reset()
+        
+        # Consume batches until we reach or pass the target file index
+        # The C++ loader's file_idx tracks which file it's currently loading
+        while self.loader.file_idx < target_file_idx:
+            try:
+                # Consume a batch to advance the file index
+                _ = self.loader.next()
+            except (RuntimeError, IndexError) as e:
+                if "End of dataset reached" in str(e):
+                    # Reached end of dataset, reset and stop
+                    self.loader.reset()
+                    break
+                raise e
+        
+        print(f"Skipped to file index {self.loader.file_idx} (target was {target_file_idx})")
     
     @property
     def sample_size(self):

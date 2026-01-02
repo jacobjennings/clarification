@@ -39,6 +39,8 @@ class AudioTrainerState:
     last_matmul_value: str = "highest"
     data_loader_iter: Optional[Iterable[DataLoader]] = None
     scaler: Optional[torch.cuda.amp.GradScaler] = None
+    # File index for resuming with CppDataLoader (which doesn't support __len__)
+    data_loader_file_idx: int = 0
 
     def __post_init__(self):
         pass
