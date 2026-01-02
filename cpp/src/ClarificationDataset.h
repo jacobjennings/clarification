@@ -201,6 +201,25 @@ public:
         preload_cv_.notify_all();
     }
 
+    /**
+     * Set file_idx directly without consuming batches (O(1) operation).
+     * Used for fair comparison mode to restore loader position efficiently.
+     * Clears preload queue and leftover frames, then starts preloading from new position.
+     */
+    void set_file_idx(int target_idx) {
+        std::lock_guard<std::mutex> lock(queue_mutex_);
+        // Clamp to valid range
+        target_idx = std::max(0, std::min(target_idx, static_cast<int>(sample_infos_.size())));
+        file_idx = target_idx;
+        all_files_processed_ = (target_idx >= static_cast<int>(sample_infos_.size()));
+        // Clear preload queue - will be refilled from new position
+        while (!preloaded_batches_.empty()) {
+            preloaded_batches_.pop();
+        }
+        leftover_frames_ = torch::Tensor();
+        preload_cv_.notify_all();
+    }
+
     int total_files() const {
         return static_cast<int>(sample_infos_.size());
     }

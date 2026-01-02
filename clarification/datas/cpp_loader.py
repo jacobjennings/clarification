@@ -105,7 +105,9 @@ class CppDataLoader:
     def __iter__(self):
         if self.loader is None:
             raise RuntimeError("Loader has been stopped")
-        self.loader.reset()
+        # NOTE: Do NOT call reset() here - that resets file_idx to 0!
+        # Use reset() explicitly when you want to start from the beginning.
+        # Calling iter() should just return the iterator without changing position.
         return self
         
     def __next__(self):
@@ -150,11 +152,10 @@ class CppDataLoader:
     
     def skip_to_file(self, target_file_idx: int):
         """
-        Skip forward to a specific file index for resuming training.
+        Skip to a specific file index for resuming training.
         
-        Note: This resets the loader and fast-forwards by consuming batches
-        until the target file index is reached. Some overshoot may occur
-        due to preloading.
+        This is an O(1) operation that directly sets the file index and clears
+        the preload queue. The preloader will then start loading from the new position.
         
         Args:
             target_file_idx: The file index to skip to (0-based)
@@ -162,26 +163,13 @@ class CppDataLoader:
         if self.loader is None:
             return
         
-        if target_file_idx <= 0:
-            return
+        if target_file_idx < 0:
+            target_file_idx = 0
             
-        # Reset to start
-        self.loader.reset()
+        # Use the C++ set_file_idx method for O(1) position change
+        self.loader.set_file_idx(target_file_idx)
         
-        # Consume batches until we reach or pass the target file index
-        # The C++ loader's file_idx tracks which file it's currently loading
-        while self.loader.file_idx < target_file_idx:
-            try:
-                # Consume a batch to advance the file index
-                _ = self.loader.next()
-            except (RuntimeError, IndexError) as e:
-                if "End of dataset reached" in str(e):
-                    # Reached end of dataset, reset and stop
-                    self.loader.reset()
-                    break
-                raise e
-        
-        print(f"Skipped to file index {self.loader.file_idx} (target was {target_file_idx})")
+        print(f"Set file index to {self.loader.file_idx} (target was {target_file_idx})")
     
     @property
     def sample_size(self):

@@ -150,8 +150,8 @@ class TestCppDataLoaderResume(unittest.TestCase):
         self.assertLess(actual_idx, total,
             "file_idx should not exceed total_files")
     
-    def test_skip_to_file_zero_is_noop(self):
-        """Test that skip_to_file(0) does nothing."""
+    def test_skip_to_file_zero_resets(self):
+        """Test that skip_to_file(0) sets file_idx to 0."""
         if not self.test_dir:
             self.skipTest("Test data not available")
         
@@ -159,14 +159,17 @@ class TestCppDataLoaderResume(unittest.TestCase):
         time.sleep(0.5)
         
         initial_idx = loader.file_idx
+        print(f"\n  Initial: {initial_idx}")
+        self.assertGreater(initial_idx, 0, "Preloader should have advanced file_idx")
+        
         loader.skip_to_file(0)
         after_idx = loader.file_idx
         
-        print(f"\n  Initial: {initial_idx}, After skip(0): {after_idx}")
+        print(f"  After skip(0): {after_idx}")
         
-        # Skip to 0 should be a no-op
-        self.assertEqual(initial_idx, after_idx,
-            "skip_to_file(0) should not change file_idx")
+        # skip_to_file(0) should set file_idx to 0 (useful for fair comparison mode)
+        self.assertEqual(after_idx, 0,
+            "skip_to_file(0) should set file_idx to 0")
     
     def test_skip_to_file_beyond_total_resets(self):
         """Test that skip_to_file beyond total_files handles gracefully."""
@@ -218,6 +221,29 @@ class TestCppDataLoaderResume(unittest.TestCase):
         self.assertIsInstance(device_str, str)
         self.assertTrue('cuda' in device_str or 'cpu' in device_str,
             "pin_memory_device should contain 'cuda' or 'cpu'")
+    
+    def test_iter_does_not_reset(self):
+        """Test that iter(loader) does NOT reset the loader (preserves position)."""
+        if not self.test_dir:
+            self.skipTest("Test data not available")
+        
+        loader = self._create_loader()
+        time.sleep(0.5)  # Let preloader advance
+        
+        # Get current position after preloading has started
+        initial_idx = loader.file_idx
+        print(f"\n  Initial file_idx (after preload): {initial_idx}")
+        
+        # iter() should NOT reset - position should be preserved
+        iter(loader)
+        time.sleep(0.1)  # Small delay
+        
+        after_iter_idx = loader.file_idx
+        print(f"  After iter() file_idx: {after_iter_idx}")
+        
+        # file_idx should be >= initial (preloader may have advanced it further)
+        self.assertGreaterEqual(after_iter_idx, initial_idx,
+            "iter(loader) should NOT reset file_idx - use reset() explicitly")
 
 
 class TestPythonDataLoaderResume(unittest.TestCase):
@@ -394,8 +420,8 @@ class TestPythonDataLoaderResume(unittest.TestCase):
         self.assertEqual(loader.file_idx, 0, 
             "reset() should set file_idx back to 0")
     
-    def test_iter_calls_reset(self):
-        """Test that iter(loader) resets the loader."""
+    def test_iter_does_not_reset(self):
+        """Test that iter(loader) does NOT reset the loader (preserves position)."""
         if not self.test_dir:
             self.skipTest("Test data not available")
         
@@ -411,11 +437,11 @@ class TestPythonDataLoaderResume(unittest.TestCase):
         advanced_idx = loader.file_idx
         self.assertGreater(advanced_idx, 0)
         
-        # iter() should reset
+        # iter() should NOT reset - position should be preserved
         iter(loader)
         
-        self.assertEqual(loader.file_idx, 0,
-            "iter(loader) should reset file_idx to 0")
+        self.assertEqual(loader.file_idx, advanced_idx,
+            "iter(loader) should NOT reset file_idx - use reset() explicitly")
 
 
 class TestResumeConsistency(unittest.TestCase):
@@ -513,6 +539,219 @@ class TestResumeConsistency(unittest.TestCase):
         
         self.assertEqual(cpp_total, py_total,
             "Both loaders should report the same total_files")
+
+
+class TestFairComparisonMode(unittest.TestCase):
+    """Test fair comparison mode functionality for multi-model training."""
+    
+    @classmethod
+    def setUpClass(cls):
+        cls.cuda_available = torch.cuda.is_available()
+        ensure_test_dirs()
+        
+        cls.test_dir = TEST_LZ4_DIR
+        if not dataset_exists(cls.test_dir):
+            print(f"\n  SKIP: LZ4 test data not found at {cls.test_dir}")
+            print(f"  Run: python -m tests.generate_test_data")
+            cls.test_dir = None
+    
+    def _create_cpp_loader(self, batch_size=16):
+        """Create a CppDataLoader with standard settings."""
+        from clarification.datas.cpp_loader import CppDataLoader
+        
+        device = torch.device('cuda:0' if self.cuda_available else 'cpu')
+        return CppDataLoader(
+            device=device,
+            base_dir=os.path.join(self.test_dir, "train"),
+            csv_filename="train.csv",
+            batch_size=batch_size,
+            num_preload_batches=4,
+            num_threads=4,
+            use_lz4=True
+        )
+    
+    def _create_py_loader(self, batch_size=16):
+        """Create a PythonDataLoader with standard settings."""
+        from clarification.datas.noisy_dataset import PythonDataLoader
+        
+        device = torch.device('cuda:0' if self.cuda_available else 'cpu')
+        return PythonDataLoader(
+            device=device,
+            base_dir=os.path.join(self.test_dir, "train"),
+            csv_filename="train.csv",
+            batch_size=batch_size,
+            use_lz4=True
+        )
+    
+    def test_cpp_set_file_idx_direct(self):
+        """Test that CppDataLoader.skip_to_file uses O(1) set_file_idx."""
+        if not self.test_dir:
+            self.skipTest("Test data not available")
+        
+        loader = self._create_cpp_loader()
+        total = loader.total_files
+        
+        # Skip to roughly 1/3 of the way through
+        target_idx = total // 3
+        print(f"\n  Total files: {total}")
+        print(f"  Target file index: {target_idx}")
+        
+        # Time the skip operation - should be nearly instant (O(1))
+        import time
+        start = time.time()
+        loader.skip_to_file(target_idx)
+        elapsed = time.time() - start
+        
+        print(f"  skip_to_file took: {elapsed:.4f}s")
+        print(f"  Actual file_idx: {loader.file_idx}")
+        
+        # Should be very fast (< 1 second even for large indices)
+        self.assertLess(elapsed, 1.0, 
+            "skip_to_file should be O(1), not O(N)")
+        
+        # file_idx should be exactly at target (O(1) set, not consume-based)
+        self.assertEqual(loader.file_idx, target_idx,
+            f"file_idx should be exactly {target_idx}")
+    
+    def test_cpp_skip_to_file_clears_preload_queue(self):
+        """Test that skip_to_file clears the preload queue."""
+        if not self.test_dir:
+            self.skipTest("Test data not available")
+        
+        loader = self._create_cpp_loader()
+        time.sleep(0.5)  # Let preloader fill queue
+        
+        # Consume a few batches to advance
+        for _ in range(3):
+            try:
+                next(loader)
+            except StopIteration:
+                break
+        
+        initial_idx = loader.file_idx
+        print(f"\n  Initial file_idx: {initial_idx}")
+        
+        # Skip to a different position
+        target_idx = max(0, initial_idx - 5)
+        loader.skip_to_file(target_idx)
+        
+        print(f"  After skip_to_file({target_idx}): file_idx={loader.file_idx}")
+        
+        # file_idx should be at target
+        self.assertEqual(loader.file_idx, target_idx,
+            f"file_idx should be {target_idx}")
+        
+        # Preloader should start from new position - verify by consuming a batch
+        time.sleep(0.5)  # Give preloader time to fill
+        try:
+            batch = next(loader)
+            self.assertIsNotNone(batch, "Should be able to get batch from new position")
+            print(f"  Successfully got batch from new position")
+        except StopIteration:
+            self.fail("Should be able to get batch from new position")
+    
+    def test_fair_comparison_restore_position(self):
+        """Test fair comparison: restore position to same starting point."""
+        if not self.test_dir:
+            self.skipTest("Test data not available")
+        
+        loader = self._create_cpp_loader()
+        time.sleep(0.3)
+        
+        # Record starting position
+        start_idx = loader.file_idx
+        print(f"\n  Starting file_idx: {start_idx}")
+        
+        # Simulate "model 1" training - consume several batches
+        batches_consumed = 0
+        for _ in range(5):
+            try:
+                next(loader)
+                batches_consumed += 1
+            except StopIteration:
+                break
+        
+        after_model1_idx = loader.file_idx
+        print(f"  After model 1 ({batches_consumed} batches): file_idx={after_model1_idx}")
+        
+        # Fair comparison: restore to starting position for "model 2"
+        loader.skip_to_file(start_idx)
+        restored_idx = loader.file_idx
+        print(f"  After restore: file_idx={restored_idx}")
+        
+        self.assertEqual(restored_idx, start_idx,
+            "Fair comparison: file_idx should be restored to start")
+    
+    def test_py_loader_skip_to_file_is_o1(self):
+        """Test that PythonDataLoader.skip_to_file is O(1)."""
+        if not self.test_dir:
+            self.skipTest("Test data not available")
+        
+        loader = self._create_py_loader()
+        total = loader.total_files
+        
+        # Skip to 2/3 of the way through
+        target_idx = (total * 2) // 3
+        print(f"\n  Total files: {total}")
+        print(f"  Target: {target_idx}")
+        
+        import time
+        start = time.time()
+        loader.skip_to_file(target_idx)
+        elapsed = time.time() - start
+        
+        print(f"  Elapsed: {elapsed:.4f}s")
+        print(f"  file_idx: {loader.file_idx}")
+        
+        # Should be instant
+        self.assertLess(elapsed, 0.1, 
+            "PythonDataLoader.skip_to_file should be O(1)")
+        
+        self.assertEqual(loader.file_idx, target_idx,
+            f"file_idx should be exactly {target_idx}")
+    
+    def test_cpp_skip_to_zero_works(self):
+        """Test that skip_to_file(0) correctly resets to beginning."""
+        if not self.test_dir:
+            self.skipTest("Test data not available")
+        
+        loader = self._create_cpp_loader()
+        time.sleep(0.3)
+        
+        # Consume some batches
+        for _ in range(3):
+            try:
+                next(loader)
+            except StopIteration:
+                break
+        
+        advanced_idx = loader.file_idx
+        print(f"\n  Advanced file_idx: {advanced_idx}")
+        self.assertGreater(advanced_idx, 0, "Should have advanced")
+        
+        # Skip to 0
+        loader.skip_to_file(0)
+        
+        print(f"  After skip_to_file(0): file_idx={loader.file_idx}")
+        self.assertEqual(loader.file_idx, 0,
+            "skip_to_file(0) should set file_idx to 0")
+    
+    def test_cpp_skip_beyond_total_clamps(self):
+        """Test that skip_to_file beyond total_files clamps to total."""
+        if not self.test_dir:
+            self.skipTest("Test data not available")
+        
+        loader = self._create_cpp_loader()
+        total = loader.total_files
+        
+        # Try to skip past the end
+        loader.skip_to_file(total + 100)
+        
+        print(f"\n  Total: {total}")
+        print(f"  After skip_to_file({total + 100}): file_idx={loader.file_idx}")
+        
+        self.assertEqual(loader.file_idx, total,
+            "skip_to_file beyond total should clamp to total")
 
 
 if __name__ == '__main__':

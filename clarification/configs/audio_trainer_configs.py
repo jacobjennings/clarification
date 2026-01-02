@@ -79,6 +79,10 @@ class TrainMultipleConfig:
     should_perform_memory_test: bool = False
     resume_from_run_dir: Optional[str] = None
     auto_resume: bool = True
+    # If True, all models train on the SAME data each round (fair architecture comparison)
+    # This requires re-reading data from disk for each model after the first.
+    # If False, models train on different sequential data (faster, but unfair comparison)
+    fair_comparison_mode: bool = True
 
     def __post_init__(self):
         pass

@@ -27,13 +27,13 @@ from clarification.util import *
 # batches_per_iteration = 416
 # batches_per_iteration = 448
 # batches_per_iteration = 480
-batches_per_iteration = 512
+# batches_per_iteration = 512
 # batches_per_iteration = 640
 # batches_per_iteration = 768
 # batches_per_iteration = 896
 # batches_per_iteration = 1024
 # batches_per_iteration = 1152
-# batches_per_iteration = 1280
+batches_per_iteration = 1280
 # batches_per_iteration = 1408
 # batches_per_iteration = 1536
 # batches_per_iteration = 1664
@@ -256,6 +256,8 @@ class Experiment1:
             trainer_configs=configs,
             should_perform_memory_test=False,
             auto_resume=not FRESH_START,  # Set FRESH_START=True at top of file to start from scratch
+            # fair_comparison_mode=True (default): All models train on same data each round
+            # fair_comparison_mode=False: Models train on sequential data (faster but unfair)
         )
         train_multiple = c.training.train_multiple.TrainMultiple(
             config=train_multiple_config

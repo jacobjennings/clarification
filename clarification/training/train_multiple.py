@@ -120,11 +120,28 @@ class TrainMultiple:
                 self.train_rotation(audio_trainer_config=model_training_config, memory_test_run=True)
 
         while True:
-            previous_iterator = None
-            for model_training_config in self.c.trainer_configs:
-                model_training_config.state.data_loader_iter = previous_iterator
+            # Get shared dataset loader (all models use the same one)
+            first_config = self.c.trainer_configs[0]
+            dataset_loader = first_config.model_training_config.dataset_loader
+            
+            # Fair comparison: all models train on the SAME data each round
+            # Save position at start of round to restore for subsequent models
+            round_start_file_idx = dataset_loader.file_idx if self.c.fair_comparison_mode else 0
+            
+            for i, model_training_config in enumerate(self.c.trainer_configs):
+                if self.c.fair_comparison_mode and i > 0:
+                    # Restore loader position so this model sees the same data as the first
+                    # Note: This re-reads data from disk (handled efficiently by preloader)
+                    # For very large file indices, skip_to_file can be slow (O(N) for C++ loader)
+                    print(f"Fair comparison mode: restoring loader to file_idx={round_start_file_idx}")
+                    if round_start_file_idx == 0:
+                        dataset_loader.reset()
+                    else:
+                        dataset_loader.skip_to_file(round_start_file_idx)
+                    # Clear the iterator so it picks up from the restored position
+                    model_training_config.state.data_loader_iter = None
+                
                 self.train_rotation(audio_trainer_config=model_training_config)
-                previous_iterator = model_training_config.state.data_loader_iter
 
         pass
 

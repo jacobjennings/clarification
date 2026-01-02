@@ -528,10 +528,14 @@ class AudioTrainer:
     def reset_epoch(self):
         print(f"Resetting epoch / iter for {self.m.name}")
         self.s.epoch_count += 1
+        # Explicitly reset the loader to start from the beginning of the dataset
+        self.m.dataset_loader.reset()
         self.s.data_loader_iter = iter(self.m.dataset_loader)
 
     def run_validation(self):
         validation_batch_count = 0
+        # Explicitly reset validation loader to start from the beginning
+        self.m.validation_config.test_loader.reset()
         input_loader_iter = iter(self.m.validation_config.test_loader)
         iterations_since_step = 0
         

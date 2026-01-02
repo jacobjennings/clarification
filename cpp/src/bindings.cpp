@@ -8,6 +8,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     py::class_<ClarificationDataset>(m, "ClarificationDataset")
         .def("next", &ClarificationDataset::next)
         .def("reset", &ClarificationDataset::reset)
+        .def("set_file_idx", &ClarificationDataset::set_file_idx)
         .def("total_files", &ClarificationDataset::total_files)
         .def_readonly("sample_size", &ClarificationDataset::sample_size)
         .def_readonly("sample_rate", &ClarificationDataset::sample_rate)

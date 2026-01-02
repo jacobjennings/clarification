@@ -206,7 +206,9 @@ class PythonDataLoader:
         self._buffer = []  # Buffer for partial batches
     
     def __iter__(self):
-        self.reset()
+        # NOTE: Do NOT call reset() here - that resets file_idx to 0!
+        # Use reset() explicitly when you want to start from the beginning.
+        # Calling iter() should just return the iterator without changing position.
         return self
     
     def __next__(self) -> torch.Tensor:
