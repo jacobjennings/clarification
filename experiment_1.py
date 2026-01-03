@@ -27,7 +27,7 @@ from clarification.util import *
 # batches_per_iteration = 416
 # batches_per_iteration = 448
 # batches_per_iteration = 480
-# batches_per_iteration = 512
+batches_per_iteration = 512
 # batches_per_iteration = 640
 # batches_per_iteration = 768
 # batches_per_iteration = 896
@@ -39,7 +39,7 @@ from clarification.util import *
 # batches_per_iteration = 1664
 # batches_per_iteration = 1792
 # batches_per_iteration = 1920
-batches_per_iteration = 2048
+# batches_per_iteration = 2048
 
 # Set to True to start fresh (no weight loading, new TensorBoard directory)
 FRESH_START = False

@@ -84,7 +84,11 @@ def compute_dense_metadata(layer_sizes: List[int]) -> Tuple[List[int], List[int]
             prev_depth = depths[prev_idx]
             # When viewing from prev_depth to layer_depth, channels multiply by 2^(depth_diff)
             depth_diff = layer_depth - prev_depth
-            effective_channels = layer_sizes[prev_idx] * (2 ** depth_diff)
+            if depth_diff >= 0:
+                effective_channels = layer_sizes[prev_idx] * (2 ** depth_diff)
+            else:
+                # Negative depth_diff means upsampling - channels divide
+                effective_channels = layer_sizes[prev_idx] // (2 ** (-depth_diff))
             offsets.append((current_offset, effective_channels))
             current_offset += effective_channels
         
