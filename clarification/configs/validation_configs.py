@@ -33,6 +33,6 @@ class ValidationConfig:
 class PresetValidationConfig1(ValidationConfig):
     # test_loader: DataLoader
     test_batches: int = 20000
-    run_validation_every_batches: int = 100000
+    run_validation_every_batches: int = 200000
     log_every_batches: int = 100000
 

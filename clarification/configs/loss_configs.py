@@ -395,15 +395,93 @@ def loss_group_l1_to_perceptual(dataset_config: DatasetConfig,
         ),
     ]
 
-    # def dd_encoder_maker(name, scalar, layer_sizes):
-    #     dd_model = clarification.loss.DistortionDetectorDenseEncoder(
-    #         in_channels=1, samples_per_batch=samples_per_batch * dataset_batch_size,
-    #         layer_sizes=layer_sizes, device=device, dtype=dtype)
-
-    #     return name, scalar, dd_model, True, samples_per_batch * dataset_batch_size
-
-# def loss_group_2(dataset_config: DatasetConfig,
-#                  device: Optional[torch.device] = None) -> Sequence[AudioLossFunctionConfig]:
-#     if not device:
-#         device = torch.get_default_device()
+def loss_group_sisdr_first(dataset_config: DatasetConfig,
+                           device: Optional[torch.device] = None,
+                           warmup_steps: int = 5000,
+                           sisdr_phase_end: int = 200000,
+                           transition_end: int = 500000) -> Sequence[AudioLossFunctionConfig]:
+    """
+    Improved loss schedule based on loss function characteristics:
+    
+    Rationale:
+    - SI-SDR is scale-invariant and captures signal structure well - good for early training
+    - L1 encourages sparse residuals which can cause over-smoothing if used alone early
+    - Mel-STFT is perceptual and best for fine-tuning once structure is established
+    
+    Phase 1 (0 to sisdr_phase_end): SI-SDR dominant + small L1 for stability
+        - SISDRLoss: 1.0 (after warmup)
+        - L1Loss: 0.2 (stability, prevents SI-SDR from producing artifacts)
+        - MelSTFTLoss: 0.0
+    
+    Phase 2 (sisdr_phase_end to transition_end): Transition to perceptual
+        - SISDRLoss: decays 1.0 → 0.3
+        - L1Loss: stays at 0.2
+        - MelSTFTLoss: ramps 0.0 → 1.0
+    
+    Phase 3 (after transition_end): Perceptual fine-tuning
+        - SISDRLoss: 0.3 (maintains structure)
+        - L1Loss: 0.1 (minimal)
+        - MelSTFTLoss: 1.0 (dominant)
+    """
+    if not device:
+        device = torch.get_default_device()
+    
+    def sisdr_schedule(step: int) -> float:
+        """SI-SDR: warmup, then full strength, then decay to maintenance level"""
+        if step <= warmup_steps:
+            # Warmup from 0 to 1
+            return step / warmup_steps
+        elif step <= sisdr_phase_end:
+            return 1.0
+        elif step <= transition_end:
+            # Decay from 1.0 to 0.3
+            progress = (step - sisdr_phase_end) / (transition_end - sisdr_phase_end)
+            return 1.0 - 0.7 * progress
+        else:
+            return 0.3
+    
+    def l1_schedule(step: int) -> float:
+        """L1: small constant for stability, decreases slightly at end"""
+        if step <= transition_end:
+            return 0.2
+        else:
+            return 0.1
+    
+    def melstft_schedule(step: int) -> float:
+        """MelSTFT: 0 in phase 1, ramps up in phase 2, 1.0 in phase 3"""
+        if step <= sisdr_phase_end:
+            return 0.0
+        elif step <= transition_end:
+            progress = (step - sisdr_phase_end) / (transition_end - sisdr_phase_end)
+            return progress
+        else:
+            return 1.0
+    
+    return [
+        AudioLossFunctionConfig(
+            name="SISDRLoss",
+            weight=1.0,
+            weight_fn=sisdr_schedule,
+            fn=auraloss.time.SISDRLoss().to(device),
+            is_unary=False,
+        ),
+        AudioLossFunctionConfig(
+            name="L1Loss",
+            weight=1.0,
+            weight_fn=l1_schedule,
+            fn=nn.L1Loss().to(device),
+            is_unary=False,
+        ),
+        AudioLossFunctionConfig(
+            name="MelSTFTLoss",
+            weight=1.0,
+            weight_fn=melstft_schedule,
+            fn=auraloss.freq.MelSTFTLoss(
+                sample_rate=dataset_config.sample_rate,
+                n_mels=128,
+                device=device
+            ).to(device),
+            is_unary=False,
+        ),
+    ]
 

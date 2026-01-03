@@ -10,10 +10,13 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def("reset", &ClarificationDataset::reset)
         .def("set_file_idx", &ClarificationDataset::set_file_idx)
         .def("total_files", &ClarificationDataset::total_files)
+        .def("reset_preload_stats", &ClarificationDataset::reset_preload_stats)
         .def_readonly("sample_size", &ClarificationDataset::sample_size)
         .def_readonly("sample_rate", &ClarificationDataset::sample_rate)
         .def_readonly("overlap_size", &ClarificationDataset::overlap_size)
-        .def_readonly("file_idx", &ClarificationDataset::file_idx);
+        .def_readonly("file_idx", &ClarificationDataset::file_idx)
+        .def_readonly("preload_stalls", &ClarificationDataset::preload_stalls)
+        .def_readonly("total_next_calls", &ClarificationDataset::total_next_calls);
 
     // LZ4 compressed raw audio loader
     py::class_<ClarificationLz4Dataset, ClarificationDataset>(m, "ClarificationLz4Dataset")

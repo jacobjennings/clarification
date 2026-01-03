@@ -74,7 +74,7 @@ class CommonVoiceLoader:
                 num_preload_batches=min(
                     4, self.num_preload_batches
                 ),  # Validation needs fewer
-                num_threads=1,
+                num_threads=4,  # Was 1 - caused slow warmup after reset()
                 use_lz4=self.use_lz4,
             )
 

@@ -33,13 +33,13 @@ from clarification.util import *
 # batches_per_iteration = 896
 # batches_per_iteration = 1024
 # batches_per_iteration = 1152
-batches_per_iteration = 1280
+# batches_per_iteration = 1280
 # batches_per_iteration = 1408
 # batches_per_iteration = 1536
 # batches_per_iteration = 1664
 # batches_per_iteration = 1792
 # batches_per_iteration = 1920
-# batches_per_iteration = 2048
+batches_per_iteration = 2048
 
 # Set to True to start fresh (no weight loading, new TensorBoard directory)
 FRESH_START = False
@@ -79,7 +79,7 @@ class Experiment1:
             dataset_config=self.dataset_config,
             dataset_loader=self.dataset_loader.train_loader,
             batches_per_iteration=batches_per_iteration,
-            batches_per_rotation=50000,
+            batches_per_rotation=100000,
             training_date_str=self.training_date_str,
             validation_config=self.validation_config,
             loss_function_configs=loss_configs,
@@ -128,7 +128,7 @@ class Experiment1:
             dataset_config=self.dataset_config,
             dataset_loader=self.dataset_loader.train_loader,
             batches_per_iteration=batches_per_iteration,
-            batches_per_rotation=50000,
+            batches_per_rotation=100000,
             training_date_str=self.training_date_str,
             validation_config=self.validation_config,
             loss_function_configs=loss_configs,
@@ -155,7 +155,7 @@ class Experiment1:
             dataset_config=self.dataset_config,
             dataset_loader=self.dataset_loader.train_loader,
             batches_per_iteration=batches_per_iteration,
-            batches_per_rotation=5000,
+            batches_per_rotation=100000,
             training_date_str=self.training_date_str,
             validation_config=self.validation_config,
         )
@@ -185,7 +185,7 @@ class Experiment1:
             batches_per_iteration=dataset_config.batches_per_iteration,
             use_cpp_loader=use_cpp_loader,
             dataset_path=dataset_path,
-            num_preload_batches=8,  # Reduce from 16 to save ~2GB VRAM
+            num_preload_batches=6,  # Reduce from 16 to save ~2GB VRAM
         )
         dataset_loader.create_loaders()
 
@@ -241,15 +241,69 @@ class Experiment1:
             # self.dense_config("dense2", [56, 72, 88, 72, 56], loss_fn=c.configs.loss_group_1, mixed_precision_config=amp_config),
             # self.dense_config("dense3", [40, 72, 104, 72, 40], loss_fn=c.configs.loss_group_1, mixed_precision_config=amp_config),
             # self.dense_config("dense4", [104, 120, 136, 120, 104], loss_fn=c.configs.loss_group_1, mixed_precision_config=amp_config),
+            # self.dense_config(
+            #     "dense5",
+            #     [56, 48, 40, 48, 56],
+            #     loss_fn=c.configs.loss_group_1,
+            #     mixed_precision_config=amp_config,
+            # ),
+            # self.dense_config(
+            #     "dense6",
+            #     [24, 56, 88, 56, 24],
+            #     loss_fn=c.configs.loss_group_1,
+            #     mixed_precision_config=amp_config,
+            # ),
+            # self.dense_config(
+            #     "dense7",
+            #     [56, 72, 88, 72, 56],  # 260k params - bulging growth
+            #     loss_fn=c.configs.loss_group_1,
+            #     mixed_precision_config=amp_config,
+            # ),
+            # Tapered growth architectures (smaller middle = less new features added there)
+            # Based on dense5's success: dense connections already provide rich context,
+            # so adding fewer new channels in the middle may reduce redundancy
+            # self.dense_config(
+            #     "dense8",
+            #     [72, 56, 48, 56, 72],  # 216k params - scaled-up dense5 pattern
+            #     loss_fn=c.configs.loss_group_1,
+            #     mixed_precision_config=amp_config,
+            # ),
+            # self.dense_config(
+            #     "dense9",
+            #     [80, 64, 48, 64, 80],  # 265k params - tapered (vs dense7's bulging)
+            #     loss_fn=c.configs.loss_group_1,
+            #     mixed_precision_config=amp_config,
+            # ),
+            # ~100k param experiments: testing symmetric vs asymmetric
+            # self.dense_config(
+            #     "dense10",
+            #     [64, 24, 24, 24, 64],  # 101k params - symmetric, wide outer, small middle
+            #     loss_fn=c.configs.loss_group_1,
+            #     mixed_precision_config=amp_config,
+            # ),
+            # self.dense_config(
+            #     "dense11",
+            #     [96, 40, 64],  # 100k params - 3-layer asymmetric, huge encoder
+            #     loss_fn=c.configs.loss_group_1,
+            #     mixed_precision_config=amp_config,
+            # ),
+            # Simple (standard U-Net with skip connections) vs Dense comparison
+            # NOTE: 3-layer Simple has NO skip connections! Need 5 layers for skip connections to be used.
+            # self.simple_config(
+            #     "simple1",
+            #     [40, 56, 72, 56, 40],  # 101k params - traditional U-Net pattern (expand middle)
+            #     loss_fn=c.configs.loss_group_1,
+            #     mixed_precision_config=amp_config,
+            # ),
+            # self.simple_config(
+            #     "simple2",
+            #     [64, 48, 32, 48, 64],  # 93k params - tapered pattern (test if our Dense learning applies)
+            #     loss_fn=c.configs.loss_group_1,
+            #     mixed_precision_config=amp_config,
+            # ),
             self.dense_config(
-                "dense5",
-                [56, 48, 40, 48, 56],
-                loss_fn=c.configs.loss_group_1,
-                mixed_precision_config=amp_config,
-            ),
-            self.dense_config(
-                "dense6",
-                [24, 56, 88, 56, 24],
+                "dense500k-left-bias",
+                [152, 144, 96, 40, 40],  # 499k - encoder 3.7x decoder
                 loss_fn=c.configs.loss_group_1,
                 mixed_precision_config=amp_config,
             ),

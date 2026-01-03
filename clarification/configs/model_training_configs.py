@@ -102,9 +102,16 @@ class PresetTrainingConfig1(ModelTrainingConfig):
             self.optimizer = torch.optim.Adam(params=self.training_model().parameters(), lr=0.001)
 
         if not self.scheduler:
-            self.scheduler = clarification.schedulers.InterpolatingLR(
+            # Use warmup scheduler by default for training stability
+            # Warmup prevents divergence from bad initial weights and large early gradients
+            self.scheduler = clarification.schedulers.WarmupThenDecayLR(
                 optimizer=self.optimizer,
-                milestones=[(0, 0.0001), (5000000, 0.00001)])
+                warmup_steps=5000,        # 5k steps warmup
+                peak_lr=1e-4,             # Peak learning rate
+                decay_end_step=5_000_000, # Decay over 5M steps
+                final_lr=1e-5,            # Final learning rate
+                warmup_start_lr=1e-7,     # Start very low to avoid instability
+            )
 
         if not self.dataset_config:
             self.dataset_config = PresetDatasetConfig1(batches_per_iteration=self.batches_per_iteration,

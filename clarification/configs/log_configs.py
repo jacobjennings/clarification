@@ -50,5 +50,13 @@ class PresetLogBehaviorConfig1(LogBehaviorConfig):
         runs_subdir_full = runs_dir() + "/" + self.runs_subdir_name
         self.profiling_data_output_dir = profiling_data_dir(a_runs_dir=runs_subdir_full)
         self.model_weights_dir = models_dir(a_runs_dir=runs_subdir_full)
-        if not self.writer:
-            self.writer = SummaryWriter(log_dir=runs_subdir_full)
+        # Store the intended log dir but DON'T create SummaryWriter yet
+        # This allows resume logic in train_multiple.py to redirect to existing run dir
+        # before any directories are created
+        self._intended_log_dir = runs_subdir_full
+        # Writer will be created lazily by ensure_writer() or by resume logic
+    
+    def ensure_writer(self):
+        """Create the SummaryWriter if it doesn't exist yet."""
+        if self.writer is None:
+            self.writer = SummaryWriter(log_dir=self._intended_log_dir)

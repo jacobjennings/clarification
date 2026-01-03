@@ -2,6 +2,7 @@ import os
 import time
 import logging
 import glob
+import json
 
 logger = logging.getLogger(__name__)
 import torch.utils.checkpoint
@@ -33,8 +34,13 @@ class AudioTrainer:
         # Get overlap_samples from the data loader (read from dataset's info.csv)
         self.overlap_samples = self.m.dataset_loader.overlap_size
 
-        if self.m.mixed_precision_config.use_scaler_dtype:
+        # Only use GradScaler for float16 - bfloat16 has same exponent range as float32
+        # and doesn't need gradient scaling to avoid underflow
+        if self.m.mixed_precision_config.needs_grad_scaler:
             self.s.scaler = GradScaler()
+            print(f"INFO: Using GradScaler for {self.m.mixed_precision_config.use_scaler_dtype} training")
+        elif self.m.mixed_precision_config.use_scaler_dtype:
+            print(f"INFO: Using {self.m.mixed_precision_config.use_scaler_dtype} without GradScaler (not needed for bfloat16)")
 
         # model_dict_path = models_dir + "/dense4-20241222-184328"
         # model = models[0][1]
@@ -66,6 +72,12 @@ class AudioTrainer:
 
         iterations_since_step = 0
         batch_count_this_rotation = 0
+
+        # Reset timing right before training loop starts to exclude any overhead
+        # (model loading, validation from previous rotation, config_to_device, etc.)
+        # Must reset both timer AND sample counter to maintain correct metric ratio
+        self.s.last_samples_processed_log_time = time.time()
+        self.s.samples_processed_since_last_log = 0
 
         # Loop iterations until batches_per_model_rotation is reached.
         while True:
@@ -153,18 +165,31 @@ class AudioTrainer:
                 # Save weights with step count in filename for resume capability
                 Path(self.l.model_weights_dir).mkdir(parents=True, exist_ok=True)
                 model_save_path = self.l.model_weights_dir + f"/weights-{self.s.batches_trained}-{self.m.name}"
+                state_save_path = self.l.model_weights_dir + f"/state-{self.s.batches_trained}-{self.m.name}.json"
                 self.w.add_text(f"model_save_path_{self.m.name}", model_save_path, self.s.batches_trained)
                 
-                # Remove old weights files to avoid disk space buildup (keep only latest)
+                # Remove old weights and state files to avoid disk space buildup (keep only latest)
                 old_weights = glob.glob(self.l.model_weights_dir + f"/weights-*-{self.m.name}")
-                for old_path in old_weights:
-                    if old_path != model_save_path:
+                old_states = glob.glob(self.l.model_weights_dir + f"/state-*-{self.m.name}.json")
+                for old_path in old_weights + old_states:
+                    if old_path != model_save_path and old_path != state_save_path:
                         try:
                             os.remove(old_path)
                         except:
                             pass
                 
                 torch.save(self.m.model.state_dict(), model_save_path)
+                
+                # Save training state for accurate resume (independent of batches_per_iteration)
+                training_state = {
+                    "data_loader_file_idx": self.m.dataset_loader.file_idx,
+                    "epoch_count": self.s.epoch_count,
+                    "samples_processed": self.s.samples_processed,
+                    "batches_trained": self.s.batches_trained,
+                }
+                with open(state_save_path, "w", encoding="utf-8") as f:
+                    json.dump(training_state, f)
+                
                 self.s.batches_since_last_save = 0
 
             if batch_count_this_rotation >= self.m.batches_per_rotation:
@@ -177,6 +202,10 @@ class AudioTrainer:
 
             self.run_validation()
             self.s.batches_since_last_validation = 0
+            
+            # Reset the samples/time tracking so validation time isn't included
+            # in the next training throughput measurement
+            self.s.last_samples_processed_log_time = time.time()
 
     def memory_test_run(self):
         print(f"Memory test run for {self.m.name} started.")
@@ -278,11 +307,10 @@ class AudioTrainer:
             model.train()
 
         input_unsqueezed = input_subsamples.unsqueeze(dim=1)
-        if self.s.scaler and allow_mixed_precision:
+        use_amp = self.m.mixed_precision_config.use_scaler_dtype and allow_mixed_precision
+        if use_amp:
             with autocast("cuda", dtype=self.m.mixed_precision_config.use_scaler_dtype):
                 prediction_raw = self.run_model(input_unsqueezed)
-            # Note: GradScaler.scale() is only used on the loss during backward pass,
-            # NOT on predictions. The scaler handles gradient scaling automatically.
         else:
             # Cast input to float32 when not using mixed precision (e.g., during validation)
             # to match model weight dtype
@@ -338,20 +366,28 @@ class AudioTrainer:
 
             # Single backward pass on total loss (much more memory efficient than
             # multiple backwards with retain_graph=True)
-            if self.s.scaler and allow_mixed_precision:
+            use_grad_scaler = self.s.scaler is not None and allow_mixed_precision
+            if use_grad_scaler:
                 self.s.scaler.scale(total_loss).backward()
             else:
                 total_loss.backward()
             del total_loss
 
-            if self.s.scaler and allow_mixed_precision:
+            if use_grad_scaler:
                 self.s.scaler.unscale_(optimizer)  # Unscale gradients before clipping
 
+            # Gradient clipping with logging
             if self.m.norm_clip:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=self.m.norm_clip)
+                # clip_grad_norm_ returns the total norm BEFORE clipping
+                pre_clip_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=self.m.norm_clip)
+                if should_log_extra_stuff:
+                    self.w.add_scalar(f"{writer_tag_prefix}grad_norm_pre_clip", pre_clip_norm.item(), writer_step)
+                    # Log whether clipping was applied (1 if clipped, 0 if not)
+                    was_clipped = 1.0 if pre_clip_norm > self.m.norm_clip else 0.0
+                    self.w.add_scalar(f"{writer_tag_prefix}grad_clip_applied", was_clipped, writer_step)
 
             if should_step_optimizer:
-                if self.s.scaler and allow_mixed_precision:
+                if use_grad_scaler:
                     self.s.scaler.step(optimizer)
                     self.s.scaler.update()
                 else:

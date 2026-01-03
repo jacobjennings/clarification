@@ -174,12 +174,30 @@ public:
         torch::NoGradGuard no_grad;
 
         std::unique_lock<std::mutex> lock(queue_mutex_);
+        
+        // Check if queue is empty BEFORE waiting - this means preloader fell behind
+        const bool queue_was_empty = preloaded_batches_.empty();
+        
         preload_cv_.wait(lock, [this] { 
             return !preloaded_batches_.empty() || quit_ || all_files_processed_; 
         });
 
         if (preloaded_batches_.empty()) {
             throw std::out_of_range("End of dataset reached");
+        }
+        
+        // Track preload performance
+        total_next_calls++;
+        if (queue_was_empty) {
+            preload_stalls++;
+            // Warn on first few stalls, then periodically
+            if (preload_stalls <= 3 || preload_stalls % 100 == 0) {
+                std::cerr << "WARNING: DataLoader preload queue was empty! "
+                          << "Stalls: " << preload_stalls << "/" << total_next_calls
+                          << " (" << (100.0 * preload_stalls / total_next_calls) << "%)"
+                          << " - consider increasing num_preload_batches or reducing batch consumption rate"
+                          << std::endl;
+            }
         }
 
         torch::Tensor batch_tensor = preloaded_batches_.front();
@@ -198,7 +216,15 @@ public:
             preloaded_batches_.pop();
         }
         leftover_frames_ = torch::Tensor();
+        // Reset preload stats on full reset
+        preload_stalls = 0;
+        total_next_calls = 0;
         preload_cv_.notify_all();
+    }
+    
+    void reset_preload_stats() {
+        preload_stalls = 0;
+        total_next_calls = 0;
     }
 
     /**
@@ -230,6 +256,10 @@ public:
     int overlap_size = 0;
     int file_idx = 0;
     torch::Device device;
+    
+    // Preload performance tracking
+    int64_t preload_stalls = 0;      // Times next() had to wait for preloader
+    int64_t total_next_calls = 0;    // Total next() calls
 
 protected:
     /**
